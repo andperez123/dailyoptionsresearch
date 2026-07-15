@@ -6,22 +6,24 @@ import { SportsBoardPage } from './pages/SportsBoardPage'
 import { TodayPage } from './pages/TodayPage'
 
 const navClass = ({ isActive }: { isActive: boolean }) =>
-  isActive ? 'text-terminal-green' : 'text-gray-300 hover:text-terminal-green'
+  isActive
+    ? 'rounded-md bg-terminal-green/10 px-3 py-1.5 font-semibold text-terminal-green'
+    : 'rounded-md px-3 py-1.5 text-slate-300 transition hover:bg-white/5 hover:text-white'
 
 export function App() {
   return (
-    <div className="min-h-screen bg-terminal-bg font-mono">
-      <header className="border-b border-terminal-border bg-terminal-panel">
-        <div className="mx-auto flex max-w-[1600px] items-center justify-between px-4 py-3">
+    <div className="min-h-screen bg-transparent font-sans text-slate-100">
+      <header className="border-b border-terminal-border bg-terminal-panel/90 shadow-lg shadow-black/20 backdrop-blur">
+        <div className="mx-auto flex max-w-[1600px] items-center justify-between px-5 py-4">
           <div>
-            <NavLink to="/" className="text-lg font-bold text-terminal-green">
+            <NavLink to="/" className="font-mono text-lg font-bold tracking-wide text-terminal-green">
               DEGEN CATALYST
             </NavLink>
-            <p className="text-[10px] text-terminal-muted">
+            <p className="mt-0.5 text-[10px] text-terminal-muted">
               signal-first intelligence · options · sports · not financial advice
             </p>
           </div>
-          <nav className="flex gap-4 text-xs">
+          <nav className="flex gap-1 text-xs">
             <NavLink to="/" className={navClass} end>
               Terminal
             </NavLink>
@@ -37,7 +39,7 @@ export function App() {
 
       <MarketPulseBar />
 
-      <main className="mx-auto max-w-[1600px] px-4 py-4">
+      <main className="mx-auto max-w-[1600px] px-5 py-6">
         <Routes>
           <Route path="/" element={<TodayPage />} />
           <Route path="/sports" element={<SportsBoardPage />} />
@@ -46,7 +48,7 @@ export function App() {
         </Routes>
       </main>
 
-      <footer className="border-t border-terminal-border py-3 text-center text-[10px] text-terminal-muted">
+      <footer className="mt-6 border-t border-terminal-border py-4 text-center text-[10px] text-terminal-muted">
         Entertainment only. Observations separated from trade ideas. Data may be delayed.
       </footer>
     </div>

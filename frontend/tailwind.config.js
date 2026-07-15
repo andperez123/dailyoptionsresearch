@@ -5,18 +5,19 @@ export default {
     extend: {
       colors: {
         terminal: {
-          bg: '#0a0e14',
-          panel: '#111820',
-          border: '#1e2a3a',
-          green: '#00ff88',
-          red: '#ff4466',
-          yellow: '#ffd166',
-          cyan: '#4dd0e1',
-          muted: '#6b7c93',
+          bg: '#080C14',
+          panel: '#111827',
+          border: '#2A3A52',
+          green: '#5EE9A6',
+          red: '#FF718A',
+          yellow: '#F6C85F',
+          cyan: '#65D9F3',
+          muted: '#9AA9BF',
         },
       },
       fontFamily: {
         mono: ['JetBrains Mono', 'Fira Code', 'Consolas', 'monospace'],
+        sans: ['Inter', 'ui-sans-serif', 'system-ui', 'sans-serif'],
       },
     },
   },

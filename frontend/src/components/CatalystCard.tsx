@@ -15,8 +15,8 @@ export function CatalystCard({
   feedbackLabel,
 }: CatalystCardProps) {
   return (
-    <article className="rounded border border-terminal-border bg-terminal-panel p-3 text-sm transition hover:border-terminal-green/30">
-      <div className="mb-2 flex flex-wrap items-center gap-2">
+    <article className="rounded-lg border border-terminal-border bg-terminal-panel p-4 text-sm shadow-md shadow-black/10 transition hover:-translate-y-px hover:border-terminal-cyan/40 hover:shadow-lg">
+      <div className="mb-3 flex flex-wrap items-center gap-2">
         <ScoreBadge label="IMP" score={catalyst.impact_score} />
         <ScoreBadge label="CONF" score={catalyst.confidence_score} />
         <DirectionBadge direction={catalyst.direction} />
@@ -29,8 +29,8 @@ export function CatalystCard({
         )}
       </div>
 
-      <h3 className="mb-1 font-semibold leading-snug text-white">{catalyst.headline}</h3>
-      <p className="mb-2 text-xs leading-relaxed text-gray-400">{catalyst.thesis || catalyst.summary}</p>
+      <h3 className="mb-1.5 text-[15px] font-semibold leading-snug text-white">{catalyst.headline}</h3>
+      <p className="mb-3 text-sm leading-6 text-slate-300">{catalyst.thesis || catalyst.summary}</p>
 
       {catalyst.current_market_reaction && (
         <p className="mb-2 text-[11px] text-terminal-cyan">
@@ -39,7 +39,7 @@ export function CatalystCard({
       )}
 
       {(catalyst.confirmation_signals.length > 0 || catalyst.invalidation_signals.length > 0) && (
-        <div className="mb-2 space-y-1 text-[10px]">
+        <div className="mb-3 space-y-1.5 rounded-md bg-terminal-bg/50 p-2.5 text-xs leading-relaxed">
           {catalyst.confirmation_signals.length > 0 && (
             <p className="text-terminal-green">
               Confirm: {catalyst.confirmation_signals.slice(0, 2).join(' · ')}
@@ -57,7 +57,7 @@ export function CatalystCard({
         {catalyst.primary_ticker && (
           <button
             onClick={() => onTickerClick(catalyst.primary_ticker!)}
-            className="rounded bg-terminal-bg px-2 py-0.5 font-mono text-xs text-terminal-yellow hover:bg-terminal-green/10"
+            className="rounded-md border border-terminal-yellow/20 bg-terminal-yellow/10 px-2 py-0.5 font-mono text-xs font-semibold text-terminal-yellow hover:bg-terminal-yellow/20"
           >
             ${catalyst.primary_ticker}
           </button>
@@ -68,7 +68,7 @@ export function CatalystCard({
             <button
               key={t}
               onClick={() => onTickerClick(t)}
-              className="rounded bg-terminal-bg px-2 py-0.5 font-mono text-xs text-terminal-cyan hover:bg-terminal-green/10"
+              className="rounded-md border border-terminal-cyan/20 bg-terminal-cyan/10 px-2 py-0.5 font-mono text-xs font-semibold text-terminal-cyan hover:bg-terminal-cyan/20"
             >
               ${t}
             </button>

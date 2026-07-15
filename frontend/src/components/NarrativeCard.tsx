@@ -10,15 +10,15 @@ export function NarrativeCard({ narrative }: NarrativeCardProps) {
   const [expanded, setExpanded] = useState(false)
 
   return (
-    <article className="rounded-lg border border-terminal-border bg-terminal-panel p-5 shadow-lg shadow-black/20">
-      <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+    <article className="rounded-xl border border-terminal-border bg-slate-900/80 p-5 shadow-lg shadow-black/20">
+      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h3 className="text-lg font-bold text-terminal-green">{narrative.title}</h3>
-          <div className="mt-1 flex flex-wrap gap-2">
+          <h3 className="text-xl font-bold tracking-tight text-terminal-green">{narrative.title}</h3>
+          <div className="mt-2 flex flex-wrap gap-2">
             {narrative.tickers.map((t) => (
               <span
                 key={t}
-                className="rounded bg-terminal-bg px-2 py-0.5 font-mono text-xs text-terminal-cyan"
+                className="rounded-md border border-terminal-cyan/20 bg-terminal-cyan/10 px-2 py-0.5 font-mono text-xs font-semibold text-terminal-cyan"
               >
                 ${t}
               </span>
@@ -28,30 +28,31 @@ export function NarrativeCard({ narrative }: NarrativeCardProps) {
         <DegenScore score={narrative.degen_score} />
       </div>
 
-      <p className="mb-3 text-sm leading-relaxed text-gray-300">{narrative.story}</p>
-      <p className="mb-4 text-xs text-terminal-muted">
-        <span className="text-terminal-yellow">WHY NOW:</span> {narrative.why_now}
+      <p className="mb-3 max-w-5xl text-[15px] leading-7 text-slate-200">{narrative.story}</p>
+      <p className="mb-5 text-sm leading-6 text-terminal-muted">
+        <span className="font-mono text-xs font-semibold text-terminal-yellow">WHY NOW:</span>{' '}
+        {narrative.why_now}
       </p>
 
       <div className="mb-4 grid gap-3 md:grid-cols-2">
-        <div className="rounded border border-green-900/40 bg-green-950/20 p-3">
-          <p className="mb-1 text-xs font-semibold uppercase text-green-400">Bull</p>
-          <p className="text-sm text-gray-300">{narrative.bull_case}</p>
+        <div className="rounded-lg border border-terminal-green/25 bg-terminal-green/[0.07] p-4">
+          <p className="mb-1.5 font-mono text-xs font-semibold uppercase tracking-wide text-terminal-green">Bull</p>
+          <p className="text-sm leading-6 text-slate-200">{narrative.bull_case}</p>
         </div>
-        <div className="rounded border border-red-900/40 bg-red-950/20 p-3">
-          <p className="mb-1 text-xs font-semibold uppercase text-terminal-red">Bear</p>
-          <p className="text-sm text-gray-300">{narrative.bear_case}</p>
+        <div className="rounded-lg border border-terminal-red/25 bg-terminal-red/[0.07] p-4">
+          <p className="mb-1.5 font-mono text-xs font-semibold uppercase tracking-wide text-terminal-red">Bear</p>
+          <p className="text-sm leading-6 text-slate-200">{narrative.bear_case}</p>
         </div>
       </div>
 
       {narrative.catalysts.length > 0 && (
         <div className="mb-4">
-          <p className="mb-1 text-xs font-semibold uppercase text-terminal-muted">Catalysts</p>
+          <p className="mb-2 font-mono text-xs font-semibold uppercase tracking-wide text-slate-300">Catalysts</p>
           <ul className="flex flex-wrap gap-2">
             {narrative.catalysts.map((c) => (
               <li
                 key={c}
-                className="rounded border border-terminal-border px-2 py-0.5 text-xs text-gray-400"
+                className="rounded-md border border-terminal-border bg-terminal-bg/60 px-2 py-1 text-xs text-slate-300"
               >
                 {c}
               </li>
@@ -98,8 +99,8 @@ export function NarrativeCard({ narrative }: NarrativeCardProps) {
       )}
 
       {narrative.sources.length > 0 && (
-        <div className="border-t border-terminal-border pt-3">
-          <p className="mb-2 text-xs font-semibold uppercase text-terminal-muted">Sources</p>
+        <div className="border-t border-terminal-border pt-4">
+          <p className="mb-2 font-mono text-xs font-semibold uppercase tracking-wide text-slate-300">Sources</p>
           <div className="flex flex-wrap gap-2">
             {narrative.sources.map((s, i) => (
               <a
