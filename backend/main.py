@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from contextlib import asynccontextmanager
 from datetime import date, datetime
 from pathlib import Path
@@ -49,6 +50,21 @@ FRONTEND_DIST = ROOT_DIR / "frontend" / "dist"
 _pipeline_lock = asyncio.Lock()
 
 
+def _cors_origins() -> list[str]:
+    origins = [
+        "http://127.0.0.1:8000",
+        "http://localhost:8000",
+        "http://127.0.0.1:5173",
+        "http://localhost:5173",
+    ]
+    railway_domain = os.environ.get("RAILWAY_PUBLIC_DOMAIN")
+    if railway_domain:
+        origins.append(f"https://{railway_domain}")
+    extra = os.environ.get("ALLOWED_ORIGINS", "")
+    origins.extend(origin.strip() for origin in extra.split(",") if origin.strip())
+    return origins
+
+
 async def require_api_secret(x_api_secret: Optional[str] = Header(default=None)) -> None:
     if settings.api_secret and x_api_secret != settings.api_secret:
         raise HTTPException(status_code=401, detail="Invalid or missing API secret")
@@ -64,7 +80,7 @@ app = FastAPI(title="Degen Catalyst Intelligence", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://127.0.0.1:8000", "http://localhost:8000", "http://127.0.0.1:5173", "http://localhost:5173"],
+    allow_origins=_cors_origins(),
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
