@@ -21,7 +21,7 @@ from pipeline.odds_relevance import (
 )
 from pipeline.odds import SportsEvent
 from pipeline.sports_news import match_teams_in_text
-from pipeline.synthesis import select_top_tickers, validate_sports_angles
+from pipeline.synthesis import _parse_model_json, select_top_tickers, validate_sports_angles
 from time_utils import parse_datetime, utc_now
 
 
@@ -218,6 +218,17 @@ def test_validate_sports_angles_requires_matching_event_and_sources() -> None:
         [],
     )
     assert dropped == []
+
+
+def test_parse_model_json_handles_markdown_fence() -> None:
+    raw = 'Here is the briefing:\n```json\n{"summary": "ok", "narratives": []}\n```'
+    data = _parse_model_json(raw)
+    assert data["summary"] == "ok"
+
+
+def test_parse_model_json_rejects_empty() -> None:
+    with pytest.raises(ValueError, match="empty"):
+        _parse_model_json("   ")
 
 
 def test_score_event_relevance_increases_with_news_hits() -> None:

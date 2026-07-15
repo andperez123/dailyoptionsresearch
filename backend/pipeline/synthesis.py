@@ -315,6 +315,50 @@ def validate_sports_angles(
     return validated
 
 
+def _parse_model_json(raw: str) -> dict[str, Any]:
+    text = (raw or "").strip()
+    if not text:
+        raise ValueError("Model returned empty briefing content")
+
+    try:
+        data = json.loads(text)
+        if isinstance(data, dict):
+            return data
+    except json.JSONDecodeError:
+        pass
+
+    fenced = re.search(r"```(?:json)?\s*(\{.*\})\s*```", text, re.DOTALL)
+    if fenced:
+        data = json.loads(fenced.group(1))
+        if isinstance(data, dict):
+            return data
+
+    start = text.find("{")
+    end = text.rfind("}")
+    if start >= 0 and end > start:
+        data = json.loads(text[start : end + 1])
+        if isinstance(data, dict):
+            return data
+
+    raise ValueError(f"Model response was not valid JSON: {text[:240]!r}")
+
+
+def _extract_response_text(response: Any) -> str:
+    text = getattr(response, "output_text", None)
+    if isinstance(text, str) and text.strip():
+        return text.strip()
+
+    parts: list[str] = []
+    for item in getattr(response, "output", None) or []:
+        if getattr(item, "type", None) != "message":
+            continue
+        for block in getattr(item, "content", None) or []:
+            block_text = getattr(block, "text", None)
+            if isinstance(block_text, str) and block_text.strip():
+                parts.append(block_text.strip())
+    return "\n".join(parts).strip()
+
+
 def _extract_citations(response: Any) -> list[dict[str, str]]:
     citations: list[dict[str, str]] = []
     output = getattr(response, "output", None) or []
@@ -342,27 +386,45 @@ async def _generate_briefing_json(
 ) -> tuple[str, list[dict[str, str]], str]:
     """Return raw JSON text, web citations, and API mode used."""
     if hasattr(client, "responses"):
-        tools = []
-        if settings.openai_use_web_search:
-            tools.append(
-                {
-                    "type": "web_search",
-                    "search_context_size": settings.openai_web_search_context,
-                }
-            )
-        response = await client.responses.create(
-            model=settings.openai_model,
-            instructions=SYSTEM_PROMPT,
-            input=user_prompt,
-            tools=tools,
-            max_tool_calls=settings.openai_max_tool_calls,
-            temperature=0.45,
-        )
-        return response.output_text or "{}", _extract_citations(response), "responses"
+        web_attempts = [True, False] if settings.openai_use_web_search else [False]
+        for use_web in web_attempts:
+            tools = []
+            if use_web:
+                tools.append(
+                    {
+                        "type": "web_search",
+                        "search_context_size": settings.openai_web_search_context,
+                    }
+                )
+            try:
+                response = await client.responses.create(
+                    model=settings.openai_model,
+                    instructions=SYSTEM_PROMPT,
+                    input=user_prompt,
+                    tools=tools,
+                    max_tool_calls=settings.openai_max_tool_calls,
+                    temperature=0.45,
+                    text={"format": {"type": "json_object"}},
+                )
+            except Exception as exc:
+                logger.warning("Responses API call failed (web=%s): %s", use_web, exc)
+                continue
 
-    logger.warning(
-        "OpenAI SDK lacks responses API; falling back to chat completions without web search"
-    )
+            raw = _extract_response_text(response)
+            status = getattr(response, "status", "unknown")
+            if not raw:
+                logger.warning("Responses API returned empty text (status=%s, web=%s)", status, use_web)
+                continue
+            try:
+                _parse_model_json(raw)
+            except ValueError as exc:
+                logger.warning("Responses JSON invalid (status=%s, web=%s): %s", status, use_web, exc)
+                continue
+            mode = "responses_web" if use_web else "responses"
+            return raw, _extract_citations(response), mode
+
+        logger.warning("Responses API produced no parseable JSON; falling back to chat completions")
+
     response = await client.chat.completions.create(
         model=settings.openai_model,
         messages=[
@@ -374,6 +436,9 @@ async def _generate_briefing_json(
         max_tokens=6000,
     )
     raw = response.choices[0].message.content or "{}"
+    if not raw.strip():
+        raise ValueError("Chat completions returned empty briefing content")
+    _parse_model_json(raw)
     return raw, [], "chat_completions"
 
 
@@ -406,7 +471,7 @@ async def synthesize_briefing(
 
     client = AsyncOpenAI(api_key=settings.openai_api_key)
     raw, citations, api_mode = await _generate_briefing_json(client, user_prompt)
-    data = json.loads(raw)
+    data = _parse_model_json(raw)
 
     sports_angles = validate_sports_angles(data.get("sports_angles", []), odds, sports_posts)
     data["sports_angles"] = [angle.model_dump(mode="json") for angle in sports_angles]
@@ -432,7 +497,7 @@ async def synthesize_briefing(
     data["research_metadata"] = {
         "model": settings.openai_model,
         "api_mode": api_mode,
-        "web_search_enabled": settings.openai_use_web_search and api_mode == "responses",
+        "web_search_enabled": api_mode == "responses_web",
         "stock_packet_size": len(json.dumps(stock_packet)),
         "sports_packet_size": len(json.dumps(sports_packet)),
         "validated_sports_angles": len(sports_angles),
