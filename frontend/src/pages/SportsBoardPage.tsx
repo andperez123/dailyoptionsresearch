@@ -1,12 +1,16 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { getSports } from '../api'
 import type { SportsBoardResponse } from '../types'
 import { formatTime } from '../lib/format'
+
+type SortMode = 'relevance' | 'soonest'
 
 export function SportsBoardPage() {
   const [board, setBoard] = useState<SportsBoardResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [sportFilter, setSportFilter] = useState<string>('all')
+  const [sortBy, setSortBy] = useState<SortMode>('relevance')
 
   useEffect(() => {
     const controller = new AbortController()
@@ -23,6 +27,27 @@ export function SportsBoardPage() {
       .finally(() => setLoading(false))
     return () => controller.abort()
   }, [])
+
+  const sportOptions = useMemo(() => {
+    if (!board) return []
+    return Array.from(new Set(board.games.map((g) => g.sport_key || g.sport))).sort()
+  }, [board])
+
+  const visibleGames = useMemo(() => {
+    if (!board) return []
+    let games = [...board.games]
+    if (sportFilter !== 'all') {
+      games = games.filter((g) => (g.sport_key || g.sport) === sportFilter)
+    }
+    if (sortBy === 'soonest') {
+      games.sort(
+        (a, b) => new Date(a.commence_time).getTime() - new Date(b.commence_time).getTime(),
+      )
+    } else {
+      games.sort((a, b) => b.relevance_score - a.relevance_score)
+    }
+    return games
+  }, [board, sportFilter, sortBy])
 
   if (loading) {
     return (
@@ -54,37 +79,86 @@ export function SportsBoardPage() {
 
   return (
     <div>
-      <div className="mb-4 flex items-center justify-between">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-lg font-bold">Sports Board</h1>
           <p className="text-[10px] text-terminal-muted">
             Observations only — not picks · Updated {formatTime(board.data_timestamp)}
+            {board.quota_remaining != null ? ` · Quota ${board.quota_remaining} left` : ''}
           </p>
+        </div>
+        <div className="flex flex-wrap gap-2 text-xs">
+          <select
+            value={sportFilter}
+            onChange={(e) => setSportFilter(e.target.value)}
+            className="rounded border border-terminal-border bg-terminal-bg px-2 py-1"
+          >
+            <option value="all">All competitions</option>
+            {sportOptions.map((sport) => (
+              <option key={sport} value={sport}>
+                {sport}
+              </option>
+            ))}
+          </select>
+          <select
+            value={sortBy}
+            onChange={(e) => setSortBy(e.target.value as SortMode)}
+            className="rounded border border-terminal-border bg-terminal-bg px-2 py-1"
+          >
+            <option value="relevance">Sort: relevance</option>
+            <option value="soonest">Sort: kickoff</option>
+          </select>
         </div>
       </div>
 
+      {board.featured_competitions.length > 0 && (
+        <div className="mb-4 flex flex-wrap gap-2">
+          {board.featured_competitions.map((comp) => (
+            <span
+              key={comp}
+              className="rounded border border-terminal-yellow/30 px-2 py-1 text-[10px] uppercase text-terminal-yellow"
+            >
+              Featured: {comp}
+            </span>
+          ))}
+        </div>
+      )}
+
       <div className="grid gap-3 md:grid-cols-2">
-        {board.games.map((game) => (
+        {visibleGames.map((game) => (
           <article
-            key={`${game.commence_time}-${game.away_team}-${game.home_team}`}
+            key={game.event_key || `${game.commence_time}-${game.away_team}-${game.home_team}`}
             className="rounded border border-terminal-border bg-terminal-panel p-4 text-sm"
           >
-            <div className="mb-2 flex items-start justify-between">
+            <div className="mb-2 flex items-start justify-between gap-2">
               <div>
-                <span className="text-[10px] uppercase text-terminal-yellow">{game.sport}</span>
+                <span className="text-[10px] uppercase text-terminal-yellow">
+                  {game.sport_title || game.sport}
+                </span>
                 <h3 className="font-bold text-white">
                   {game.away_team} @ {game.home_team}
                 </h3>
                 <p className="text-[10px] text-terminal-muted">
                   {new Date(game.commence_time).toLocaleString()}
+                  {game.is_live_window ? ' · live window' : ''}
                 </p>
               </div>
-              {game.line_movement && (
-                <span className="rounded border border-terminal-cyan/40 px-2 py-0.5 text-[10px] text-terminal-cyan">
-                  moved
-                </span>
-              )}
+              <div className="text-right text-[10px]">
+                <p className="font-mono text-terminal-cyan">score {game.relevance_score.toFixed(1)}</p>
+                {game.line_movement && (
+                  <span className="rounded border border-terminal-cyan/40 px-2 py-0.5 text-terminal-cyan">
+                    moved
+                  </span>
+                )}
+              </div>
             </div>
+
+            {game.relevance_factors && (
+              <p className="mb-2 text-[10px] text-gray-500">
+                Relevance: proximity {game.relevance_factors.proximity ?? 0} · stage{' '}
+                {game.relevance_factors.stage ?? 0} · news {game.relevance_factors.news_hits ?? 0}
+              </p>
+            )}
 
             <div className="mb-3 space-y-2">
               {game.lines.slice(0, 4).map((line) => (
@@ -108,10 +182,25 @@ export function SportsBoardPage() {
               ))}
             </div>
 
-            {game.opening_line && (
-              <p className="mb-1 text-[10px] text-terminal-muted">
-                Opening line recorded · compare to current for movement
-              </p>
+            {game.movement_delta && (
+              <p className="mb-2 text-[10px] text-terminal-cyan">{game.movement_delta}</p>
+            )}
+
+            {game.news_context.length > 0 && (
+              <div className="mb-2 space-y-1 border-t border-terminal-border pt-2">
+                <p className="text-[10px] uppercase text-terminal-muted">Matched news</p>
+                {game.news_context.slice(0, 3).map((article) => (
+                  <a
+                    key={article.url}
+                    href={article.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="block text-xs text-terminal-cyan hover:underline"
+                  >
+                    {article.title}
+                  </a>
+                ))}
+              </div>
             )}
 
             {game.ai_context && (
@@ -123,7 +212,7 @@ export function SportsBoardPage() {
         ))}
       </div>
 
-      {board.games.length === 0 && (
+      {visibleGames.length === 0 && (
         <p className="text-center text-sm text-terminal-muted">No games loaded. Worker will refresh on schedule.</p>
       )}
     </div>

@@ -214,8 +214,11 @@ async def get_deep_dive(ticker: str):
 
 
 @app.get("/api/sports", response_model=SportsBoardResponse)
-async def get_sports():
-    return await build_sports_board()
+async def get_sports(
+    sport: Optional[str] = Query(default=None, description="Filter by sport key substring"),
+    force: bool = Query(default=False),
+):
+    return await build_sports_board(force=force, sport_filter=sport)
 
 
 @app.post("/api/catalysts/{catalyst_id}/feedback", response_model=CatalystFeedbackRecord)

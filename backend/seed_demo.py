@@ -78,8 +78,12 @@ async def seed() -> None:
                 sport="NBA",
                 matchup="Lakers vs Celtics",
                 narrative="After three straight overs, r/sportsbook is loudly fading the total.",
+                why_now="Three consecutive overs have the market stretched on the total.",
                 line_note="Total opened 228.5, now 232.5",
-                public_vs_sharp="Public on over; contrarian under angle getting traction",
+                priced_in="Market already leaning over after recent high-scoring games",
+                confirmation_points=["Injury report clears starters"],
+                invalidation_points=["Pace spikes in first quarter"],
+                source_event_key="demo-nba",
                 degen_score=3,
                 sources=[
                     SourceLink(

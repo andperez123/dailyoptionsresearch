@@ -1,16 +1,20 @@
 from __future__ import annotations
 
 import json
-from datetime import date, timedelta
+import logging
+import re
+from typing import Any
 
 from openai import AsyncOpenAI
 
 from config import settings
-from models import BriefingContent
+from models import BriefingContent, SourceLink, SportsAngle
 from pipeline.news import NewsItem
 from pipeline.odds import SportsEvent
 from pipeline.options import OptionsSnapshot
-from pipeline.reddit import RedditPost, count_ticker_mentions
+from pipeline.reddit import RedditPost
+
+logger = logging.getLogger(__name__)
 
 
 def compute_buzz_delta(
@@ -49,13 +53,15 @@ def _serialize_posts(posts: list[RedditPost], limit: int = 20) -> list[dict]:
     ]
 
 
-def _serialize_news(news: list[NewsItem], limit: int = 25) -> list[dict]:
+def _serialize_news(news: list[NewsItem], limit: int = 30) -> list[dict]:
     return [
         {
             "title": n.title,
             "url": n.url,
             "source": n.source,
             "ticker": n.ticker,
+            "published": n.published,
+            "source_tier": getattr(n, "source_tier", "rss"),
         }
         for n in news[:limit]
     ]
@@ -98,13 +104,21 @@ def _serialize_options(options: list[OptionsSnapshot]) -> list[dict]:
 def _serialize_odds(events: list[SportsEvent], limit: int = 12) -> list[dict]:
     return [
         {
+            "event_id": e.event_id,
             "sport": e.sport,
+            "sport_title": e.sport_title,
             "matchup": f"{e.away_team} @ {e.home_team}",
             "commence_time": e.commence_time,
+            "relevance_score": e.relevance_score,
+            "relevance_factors": e.relevance_factors,
+            "bookmaker_count": e.bookmaker_count,
             "markets": [
                 {
                     "key": m.key,
-                    "outcomes": [{"name": o.name, "price": o.price} for o in m.outcomes],
+                    "outcomes": [
+                        {"name": o.name, "price": o.price, "point": o.point}
+                        for o in m.outcomes
+                    ],
                 }
                 for m in e.markets
             ],
@@ -113,64 +127,75 @@ def _serialize_odds(events: list[SportsEvent], limit: int = 12) -> list[dict]:
     ]
 
 
-SYSTEM_PROMPT = """You are a sharp but entertaining market research analyst writing for degen traders.
-Synthesize Reddit chatter, news, options flow, and sports betting angles into actionable narratives.
+def build_stock_research_packet(
+    finance_posts: list[RedditPost],
+    news: list[NewsItem],
+    options: list[OptionsSnapshot],
+    ticker_counts: dict[str, int],
+    buzz_deltas: dict[str, float],
+    overnight_catalysts: list[dict] | None,
+    macro_context: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    return {
+        "overnight_catalysts": overnight_catalysts or [],
+        "ticker_mentions": dict(list(ticker_counts.items())[:20]),
+        "buzz_deltas": dict(list(buzz_deltas.items())[:20]),
+        "finance_reddit": _serialize_posts(finance_posts),
+        "news": _serialize_news(news),
+        "options": _serialize_options(options),
+        "macro_context": macro_context or [],
+    }
+
+
+def build_sports_research_packet(
+    sports_posts: list[RedditPost],
+    odds: list[SportsEvent],
+    sports_news: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    return {
+        "sports_reddit": _serialize_posts(sports_posts),
+        "ranked_odds_events": _serialize_odds(odds),
+        "matched_news": sports_news or [],
+    }
+
+
+SYSTEM_PROMPT = """You are a narrative market and sports research editor.
+Write source-grounded daily briefings for a research terminal — not trade picks.
 
 Rules:
 - Output ONLY valid JSON matching the schema exactly.
-- Be specific with tickers, strike zones, and expiries when suggesting options plays.
-- Degen score 1 = conservative, 5 = full casino mode.
-- Always include risk framing. This is entertainment, not financial advice.
-- Connect sports betting narratives to market sentiment when relevant.
-- Prefer narratives with real catalysts and unusual options activity.
-- Include source URLs from the input data when available.
+- Every narrative must cite real URLs from the provided packets or web search results.
+- Do NOT invent matchups, odds, injuries, or public-vs-sharp claims.
+- Sports angles must reference a matchup present in RANKED ODDS EVENTS.
+- Stock narratives must connect to catalysts, news, or options data in the packet.
+- Prefer the dominant story: why it matters now, what is priced in, what confirms or invalidates it.
+- Degen score 1 = conservative, 5 = speculative. Include risk framing.
+- This is entertainment/research, not financial advice.
 """
 
 
 def build_user_prompt(
-    finance_posts: list[RedditPost],
-    sports_posts: list[RedditPost],
-    news: list[NewsItem],
-    options: list[OptionsSnapshot],
-    odds: list[SportsEvent],
-    ticker_counts: dict[str, int],
-    buzz_deltas: dict[str, float],
-    overnight_catalysts: list[dict] | None = None,
+    stock_packet: dict[str, Any],
+    sports_packet: dict[str, Any],
 ) -> str:
-    return f"""Create today's degen research briefing from this data.
+    return f"""Create today's narrative research briefing from these deterministic packets.
+Use web search only to enrich current reporting for the events and tickers already in the packets.
+Prioritize live and upcoming competitions with the highest relevance_score.
 
-DISTINCTION: Narratives = themes that matter. Catalysts = what just happened. Setups = what deserves investigation.
-Use OVERNIGHT CATALYSTS as primary input for narratives — these are ranked signal clusters, not raw headlines.
+STOCK RESEARCH PACKET:
+{json.dumps(stock_packet, indent=2)}
 
-OVERNIGHT CATALYSTS (ranked signals):
-{json.dumps(overnight_catalysts or [], indent=2)}
-
-TICKER MENTIONS (count): {json.dumps(dict(list(ticker_counts.items())[:20]))}
-BUZZ DELTA vs yesterday: {json.dumps(dict(list(buzz_deltas.items())[:20]))}
-
-FINANCE REDDIT POSTS:
-{json.dumps(_serialize_posts(finance_posts), indent=2)}
-
-SPORTS BETTING REDDIT POSTS:
-{json.dumps(_serialize_posts(sports_posts), indent=2)}
-
-NEWS HEADLINES:
-{json.dumps(_serialize_news(news), indent=2)}
-
-OPTIONS SNAPSHOTS:
-{json.dumps(_serialize_options(options), indent=2)}
-
-SPORTS ODDS:
-{json.dumps(_serialize_odds(odds), indent=2)}
+SPORTS RESEARCH PACKET:
+{json.dumps(sports_packet, indent=2)}
 
 Return JSON with this exact structure:
 {{
-  "summary": "2-3 sentence overview of today's vibe",
+  "summary": "2-3 sentence overview of today's dominant stories",
   "narratives": [
     {{
       "title": "string",
       "tickers": ["TICK"],
-      "story": "what's the narrative",
+      "story": "dominant narrative",
       "why_now": "why it matters today",
       "bull_case": "string",
       "bear_case": "string",
@@ -187,19 +212,23 @@ Return JSON with this exact structure:
           "risk_note": "what can go wrong"
         }}
       ],
-      "sources": [{{"title": "string", "url": "string", "source_type": "reddit|news"}}]
+      "sources": [{{"title": "string", "url": "string", "source_type": "news|reddit|catalyst|web"}}]
     }}
   ],
   "sports_angles": [
     {{
       "title": "string",
-      "sport": "NFL/NBA/etc",
-      "matchup": "Team A vs Team B",
-      "narrative": "the betting angle",
-      "line_note": "notable line or odds move",
-      "public_vs_sharp": "where public money seems vs contrarian read",
+      "sport": "competition name",
+      "matchup": "Team A @ Team B",
+      "source_event_key": "event id from ranked odds when available",
+      "narrative": "the story behind the line",
+      "why_now": "why this event matters now",
+      "line_note": "specific line/odds context from packet only",
+      "priced_in": "what the market already reflects",
+      "confirmation_points": ["what would strengthen the read"],
+      "invalidation_points": ["what would break the read"],
       "degen_score": 1-5,
-      "sources": [{{"title": "string", "url": "string", "source_type": "reddit|odds"}}]
+      "sources": [{{"title": "string", "url": "string", "source_type": "news|reddit|odds|web"}}]
     }}
   ],
   "radar": [
@@ -215,6 +244,98 @@ Return JSON with this exact structure:
 Produce 3-6 narratives, 2-4 sports angles, and 3-8 radar items."""
 
 
+def _normalize_matchup(value: str) -> str:
+    return re.sub(r"[^a-z0-9@ ]", "", value.lower()).strip()
+
+
+def _teams_from_matchup(matchup: str) -> set[str]:
+    parts = re.split(r"\s+@\s+|\s+vs\.?\s+|\s+v\s+", matchup, flags=re.IGNORECASE)
+    return {_normalize_matchup(part) for part in parts if part.strip()}
+
+
+def validate_sports_angles(
+    angles: list[dict[str, Any]],
+    odds: list[SportsEvent],
+    sports_posts: list[RedditPost],
+) -> list[SportsAngle]:
+    odds_index: dict[str, SportsEvent] = {}
+    for event in odds:
+        odds_index[_normalize_matchup(f"{event.away_team} @ {event.home_team}")] = event
+        if event.event_id:
+            odds_index[event.event_id] = event
+
+    post_urls = {p.url for p in sports_posts if p.url}
+    validated: list[SportsAngle] = []
+    for raw in angles:
+        matchup = raw.get("matchup", "")
+        normalized = _normalize_matchup(matchup)
+        event = odds_index.get(raw.get("source_event_key", "")) or odds_index.get(normalized)
+        if not event:
+            teams = _teams_from_matchup(matchup)
+            event = next(
+                (
+                    candidate
+                    for key, candidate in odds_index.items()
+                    if any(team in key for team in teams if team)
+                ),
+                None,
+            )
+        if not event:
+            logger.info("Dropping sports angle without matching event: %s", matchup)
+            continue
+
+        sources = [
+            SourceLink.model_validate(source)
+            for source in raw.get("sources", [])
+            if source.get("url")
+        ]
+        if not sources:
+            logger.info("Dropping sports angle without sources: %s", matchup)
+            continue
+
+        if not any(source.url in post_urls or source.source_type in {"news", "odds", "web"} for source in sources):
+            pass
+
+        validated.append(
+            SportsAngle(
+                title=raw.get("title", f"{event.sport_title} angle"),
+                sport=raw.get("sport", event.sport_title or event.sport),
+                matchup=f"{event.away_team} @ {event.home_team}",
+                source_event_key=event.event_id,
+                narrative=raw.get("narrative", ""),
+                why_now=raw.get("why_now", ""),
+                line_note=raw.get("line_note", ""),
+                priced_in=raw.get("priced_in", ""),
+                confirmation_points=raw.get("confirmation_points", []),
+                invalidation_points=raw.get("invalidation_points", []),
+                degen_score=int(raw.get("degen_score", 3)),
+                sources=sources,
+            )
+        )
+    return validated
+
+
+def _extract_citations(response: Any) -> list[dict[str, str]]:
+    citations: list[dict[str, str]] = []
+    output = getattr(response, "output", None) or []
+    for item in output:
+        if getattr(item, "type", None) != "message":
+            continue
+        content = getattr(item, "content", None) or []
+        for block in content:
+            annotations = getattr(block, "annotations", None) or []
+            for annotation in annotations:
+                if getattr(annotation, "type", None) == "url_citation":
+                    citations.append(
+                        {
+                            "title": getattr(annotation, "title", "") or "Web source",
+                            "url": getattr(annotation, "url", ""),
+                            "source_type": "web",
+                        }
+                    )
+    return citations
+
+
 async def synthesize_briefing(
     finance_posts: list[RedditPost],
     sports_posts: list[RedditPost],
@@ -224,35 +345,57 @@ async def synthesize_briefing(
     ticker_counts: dict[str, int],
     buzz_deltas: dict[str, float],
     overnight_catalysts: list[dict] | None = None,
+    macro_context: list[dict[str, Any]] | None = None,
+    sports_news: list[dict[str, Any]] | None = None,
 ) -> BriefingContent:
     if not settings.openai_api_key:
         raise ValueError("OPENAI_API_KEY is not configured")
 
-    client = AsyncOpenAI(api_key=settings.openai_api_key)
-    user_prompt = build_user_prompt(
+    stock_packet = build_stock_research_packet(
         finance_posts,
-        sports_posts,
         news,
         options,
-        odds,
         ticker_counts,
         buzz_deltas,
         overnight_catalysts,
+        macro_context,
     )
+    sports_packet = build_sports_research_packet(sports_posts, odds, sports_news)
+    user_prompt = build_user_prompt(stock_packet, sports_packet)
 
-    response = await client.chat.completions.create(
+    client = AsyncOpenAI(api_key=settings.openai_api_key)
+    tools = []
+    if settings.openai_use_web_search:
+        tools.append(
+            {
+                "type": "web_search",
+                "search_context_size": settings.openai_web_search_context,
+            }
+        )
+
+    response = await client.responses.create(
         model=settings.openai_model,
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_prompt},
-        ],
-        response_format={"type": "json_object"},
-        temperature=0.7,
-        max_tokens=6000,
+        instructions=SYSTEM_PROMPT,
+        input=user_prompt,
+        tools=tools,
+        max_tool_calls=settings.openai_max_tool_calls,
+        temperature=0.45,
     )
-
-    raw = response.choices[0].message.content or "{}"
+    raw = response.output_text or "{}"
     data = json.loads(raw)
+    citations = _extract_citations(response)
+
+    sports_angles = validate_sports_angles(data.get("sports_angles", []), odds, sports_posts)
+    data["sports_angles"] = [angle.model_dump(mode="json") for angle in sports_angles]
+
+    for narrative in data.get("narratives", []):
+        sources = narrative.get("sources", [])
+        if citations and len(sources) < 2:
+            for citation in citations[:3]:
+                if citation["url"] and citation not in sources:
+                    sources.append(citation)
+            narrative["sources"] = sources
+
     data["raw_stats"] = {
         "ticker_counts": dict(list(ticker_counts.items())[:20]),
         "buzz_deltas": dict(list(buzz_deltas.items())[:20]),
@@ -261,5 +404,13 @@ async def synthesize_briefing(
         "options_snapshots": len(options),
         "sports_events": len(odds),
         "overnight_catalysts": len(overnight_catalysts or []),
+        "web_citations": len(citations),
+    }
+    data["research_metadata"] = {
+        "model": settings.openai_model,
+        "web_search_enabled": settings.openai_use_web_search,
+        "stock_packet_size": len(json.dumps(stock_packet)),
+        "sports_packet_size": len(json.dumps(sports_packet)),
+        "validated_sports_angles": len(sports_angles),
     }
     return BriefingContent.model_validate(data)

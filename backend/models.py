@@ -36,12 +36,18 @@ class Narrative(BaseModel):
 
 
 class SportsAngle(BaseModel):
+    model_config = {"extra": "ignore"}
+
     title: str
     sport: str
     matchup: str
     narrative: str
+    why_now: str = ""
     line_note: str = ""
-    public_vs_sharp: str = ""
+    priced_in: str = ""
+    confirmation_points: list[str] = Field(default_factory=list)
+    invalidation_points: list[str] = Field(default_factory=list)
+    source_event_key: str = ""
     degen_score: int = Field(ge=1, le=5)
     sources: list[SourceLink] = Field(default_factory=list)
 
@@ -60,6 +66,7 @@ class BriefingContent(BaseModel):
     radar: list[RadarItem] = Field(default_factory=list)
     generated_at: datetime = Field(default_factory=datetime.utcnow)
     raw_stats: dict[str, Any] = Field(default_factory=dict)
+    research_metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class BriefingRecord(BaseModel):
@@ -194,6 +201,14 @@ class DeepDiveResponse(BaseModel):
     cached_until: datetime
 
 
+class SportsNewsContext(BaseModel):
+    title: str
+    url: str
+    source: str = ""
+    published: str = ""
+    matched_teams: list[str] = Field(default_factory=list)
+
+
 class SportsOddsLine(BaseModel):
     bookmaker: str
     market: str
@@ -201,7 +216,10 @@ class SportsOddsLine(BaseModel):
 
 
 class SportsGameCard(BaseModel):
+    event_key: str = ""
     sport: str
+    sport_key: str = ""
+    sport_title: str = ""
     home_team: str
     away_team: str
     commence_time: str
@@ -209,6 +227,12 @@ class SportsGameCard(BaseModel):
     best_line: Optional[dict[str, Any]] = None
     opening_line: Optional[dict[str, Any]] = None
     line_movement: Optional[str] = None
+    movement_delta: Optional[str] = None
+    fair_line: Optional[list[dict[str, Any]]] = None
+    relevance_score: float = 0.0
+    relevance_factors: dict[str, float] = Field(default_factory=dict)
+    is_live_window: bool = False
+    news_context: list[SportsNewsContext] = Field(default_factory=list)
     ai_context: Optional[str] = None
     data_timestamp: datetime
 
@@ -218,6 +242,10 @@ class SportsBoardResponse(BaseModel):
     configured: bool = False
     message: str = ""
     data_timestamp: datetime
+    featured_competitions: list[str] = Field(default_factory=list)
+    active_sports_count: int = 0
+    quota_remaining: Optional[int] = None
+    quota_used: Optional[int] = None
 
 
 class CatalystFeedbackRequest(BaseModel):

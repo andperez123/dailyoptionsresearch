@@ -32,8 +32,12 @@ export interface SportsAngle {
   sport: string
   matchup: string
   narrative: string
+  why_now?: string
   line_note: string
-  public_vs_sharp: string
+  priced_in?: string
+  confirmation_points?: string[]
+  invalidation_points?: string[]
+  source_event_key?: string
   degen_score: number
   sources: SourceLink[]
 }
@@ -52,6 +56,7 @@ export interface BriefingContent {
   radar: RadarItem[]
   generated_at: string
   raw_stats: Record<string, unknown>
+  research_metadata?: Record<string, unknown>
 }
 
 export interface BriefingRecord {
@@ -78,24 +83,24 @@ export interface CatalystFeedbackRecord {
 }
 
 export interface OptionsSnapshot {
-  nearest_expiry?: string
-  avg_iv?: number
-  put_call_volume_ratio?: number
-  notable_calls?: Array<{ strike: number; volume: number; oi: number }>
-  notable_puts?: Array<{ strike: number; volume: number; oi: number }>
-  error?: string
-}
-
-export interface SocialMomentum {
-  mention_count?: number
-  note?: string
-}
-
-export interface ResearchStatus {
-  running: boolean
-  last_run: string | null
-  last_error: string | null
-  message: string
+  ticker: string
+  current_price: number | null
+  nearest_expiry: string | null
+  avg_iv: number | null
+  put_call_volume_ratio: number | null
+  notable_calls: Array<{
+    strike: number
+    volume: number
+    open_interest: number
+    implied_volatility: number | null
+  }>
+  notable_puts: Array<{
+    strike: number
+    volume: number
+    open_interest: number
+    implied_volatility: number | null
+  }>
+  error: string | null
 }
 
 export interface ScoredCatalyst {
@@ -129,6 +134,13 @@ export interface ScoredCatalyst {
   scored: boolean
 }
 
+export interface WireResponse {
+  items: ScoredCatalyst[]
+  total: number
+  page: number
+  page_size: number
+}
+
 export interface MarketSnapshot {
   symbol: string
   price: number | null
@@ -148,13 +160,6 @@ export interface PulseResponse {
   provider_warnings: string[]
 }
 
-export interface WireResponse {
-  items: ScoredCatalyst[]
-  total: number
-  page: number
-  page_size: number
-}
-
 export interface CalendarEvent {
   ticker: string | null
   event_type: string
@@ -169,10 +174,20 @@ export interface CalendarEvent {
 export interface DeepDiveResponse {
   ticker: string
   price_snapshot: MarketSnapshot | null
-  options_snapshot: OptionsSnapshot
+  options_snapshot: {
+    nearest_expiry?: string | null
+    avg_iv?: number | null
+    put_call_volume_ratio?: number | null
+    notable_calls?: Array<Record<string, unknown>>
+    notable_puts?: Array<Record<string, unknown>>
+    error?: string | null
+  }
   recent_catalysts: ScoredCatalyst[]
   upcoming_events: CalendarEvent[]
-  social_momentum: SocialMomentum
+  social_momentum: {
+    mention_count?: number
+    note?: string
+  }
   bull_case: string
   bear_case: string
   confirmation_levels: string[]
@@ -183,6 +198,14 @@ export interface DeepDiveResponse {
   cached_until: string
 }
 
+export interface SportsNewsContext {
+  title: string
+  url: string
+  source: string
+  published: string
+  matched_teams: string[]
+}
+
 export interface SportsOddsLine {
   bookmaker: string
   market: string
@@ -190,7 +213,10 @@ export interface SportsOddsLine {
 }
 
 export interface SportsGameCard {
+  event_key: string
   sport: string
+  sport_key: string
+  sport_title: string
   home_team: string
   away_team: string
   commence_time: string
@@ -198,6 +224,12 @@ export interface SportsGameCard {
   best_line: Record<string, unknown> | null
   opening_line: Record<string, unknown> | null
   line_movement: string | null
+  movement_delta: string | null
+  fair_line: Array<Record<string, unknown>> | null
+  relevance_score: number
+  relevance_factors: Record<string, number>
+  is_live_window: boolean
+  news_context: SportsNewsContext[]
   ai_context: string | null
   data_timestamp: string
 }
@@ -207,4 +239,15 @@ export interface SportsBoardResponse {
   configured: boolean
   message: string
   data_timestamp: string
+  featured_competitions: string[]
+  active_sports_count: number
+  quota_remaining: number | null
+  quota_used: number | null
+}
+
+export interface ResearchStatus {
+  running: boolean
+  last_run: string | null
+  last_error: string | null
+  message: string
 }

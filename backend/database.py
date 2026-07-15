@@ -235,6 +235,23 @@ async def init_db() -> None:
             ON scored_catalysts(cluster_id) WHERE cluster_id IS NOT NULL
             """
         )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_sports_odds_event ON sports_odds_snapshots(event_key, market, snapshot_at DESC)"
+        )
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS research_jobs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_type TEXT NOT NULL,
+                status TEXT NOT NULL,
+                request_json TEXT,
+                response_json TEXT,
+                error TEXT,
+                created_at TEXT NOT NULL,
+                completed_at TEXT
+            )
+            """
+        )
         await db.commit()
 
 

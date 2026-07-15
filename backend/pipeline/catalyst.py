@@ -26,7 +26,7 @@ from locks import LOCK_CATALYST_SCAN, job_lock
 from models import CalendarEvent, DeepDiveResponse
 from pipeline.finnhub import NormalizedHeadline, finnhub_client
 from pipeline.market_data import collect_ticker_snapshot, fetch_snapshot
-from pipeline.news import collect_news
+from pipeline.news import collect_finance_news_for_watchlist, match_tickers_in_text
 from pipeline.options import fetch_options_snapshot
 from pipeline.reddit import collect_reddit_posts, count_ticker_mentions
 from pipeline.tickers import extract_tickers
@@ -93,25 +93,35 @@ def _match_ai_results(
     return matched
 
 
-async def ingest_headlines() -> list[NormalizedHeadline]:
+async def ingest_headlines(watchlist: list[str] | None = None) -> list[NormalizedHeadline]:
     headlines: list[NormalizedHeadline] = []
+    tickers = watchlist or []
 
     if finnhub_client.enabled:
         headlines.extend(await finnhub_client.fetch_general_news(limit=40))
+        if tickers:
+            company_tasks = [finnhub_client.fetch_company_news(ticker) for ticker in tickers[:8]]
+            company_results = await asyncio.gather(*company_tasks, return_exceptions=True)
+            for result in company_results:
+                if isinstance(result, Exception):
+                    continue
+                headlines.extend(result)
 
-    rss_items = await collect_news([])
-    for item in rss_items[:30]:
-        tickers = extract_tickers(item.title)
+    rss_items = await collect_finance_news_for_watchlist(tickers)
+    for item in rss_items[:40]:
+        related = [item.ticker] if item.ticker else extract_tickers(item.title)
+        if tickers and not related:
+            related = match_tickers_in_text(item.title, tickers)
         headlines.append(
             NormalizedHeadline(
-                provider="rss",
+                provider=item.source_tier if item.source_tier != "rss" else "rss",
                 external_id=item.url or item.title,
                 headline=item.title,
                 summary=item.title,
                 url=item.url,
                 published_at=parse_rss_datetime(item.published),
-                related_tickers=tickers[:3],
-                raw_payload={"source": item.source, "ticker": item.ticker},
+                related_tickers=related[:3],
+                raw_payload={"source": item.source, "ticker": item.ticker, "source_tier": item.source_tier},
             )
         )
 
@@ -321,7 +331,9 @@ async def run_catalyst_scan() -> dict[str, Any]:
     async with job_lock(LOCK_CATALYST_SCAN, "catalyst_scan") as acquired:
         if not acquired:
             return {"status": "skipped", "reason": "lock_held"}
-        headlines = await ingest_headlines()
+        posts = await collect_reddit_posts(settings.finance_subreddits[:3], posts_per_sub=10)
+        watchlist = list(count_ticker_mentions(posts).keys())[: settings.max_tickers]
+        headlines = await ingest_headlines(watchlist)
         new_headlines = await store_new_headlines(headlines)
         saved = await process_catalyst_batch(new_headlines)
         return {"ingested": len(headlines), "new": len(new_headlines), "scored": saved}

@@ -96,8 +96,9 @@ export function getDeepDive(ticker: string, signal?: AbortSignal): Promise<DeepD
   return fetchJson<DeepDiveResponse>(`/deepdive/${ticker}`, { signal })
 }
 
-export function getSports(signal?: AbortSignal): Promise<SportsBoardResponse> {
-  return fetchJson<SportsBoardResponse>('/sports', { signal })
+export function getSports(signal?: AbortSignal, sport?: string): Promise<SportsBoardResponse> {
+  const qs = sport ? `?sport=${encodeURIComponent(sport)}` : ''
+  return fetchJson<SportsBoardResponse>(`/sports${qs}`, { signal })
 }
 
 export function runCatalystScan(): Promise<{ status: string }> {
