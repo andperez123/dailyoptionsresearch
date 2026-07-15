@@ -336,6 +336,47 @@ def _extract_citations(response: Any) -> list[dict[str, str]]:
     return citations
 
 
+async def _generate_briefing_json(
+    client: AsyncOpenAI,
+    user_prompt: str,
+) -> tuple[str, list[dict[str, str]], str]:
+    """Return raw JSON text, web citations, and API mode used."""
+    if hasattr(client, "responses"):
+        tools = []
+        if settings.openai_use_web_search:
+            tools.append(
+                {
+                    "type": "web_search",
+                    "search_context_size": settings.openai_web_search_context,
+                }
+            )
+        response = await client.responses.create(
+            model=settings.openai_model,
+            instructions=SYSTEM_PROMPT,
+            input=user_prompt,
+            tools=tools,
+            max_tool_calls=settings.openai_max_tool_calls,
+            temperature=0.45,
+        )
+        return response.output_text or "{}", _extract_citations(response), "responses"
+
+    logger.warning(
+        "OpenAI SDK lacks responses API; falling back to chat completions without web search"
+    )
+    response = await client.chat.completions.create(
+        model=settings.openai_model,
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_prompt},
+        ],
+        response_format={"type": "json_object"},
+        temperature=0.45,
+        max_tokens=6000,
+    )
+    raw = response.choices[0].message.content or "{}"
+    return raw, [], "chat_completions"
+
+
 async def synthesize_briefing(
     finance_posts: list[RedditPost],
     sports_posts: list[RedditPost],
@@ -364,26 +405,8 @@ async def synthesize_briefing(
     user_prompt = build_user_prompt(stock_packet, sports_packet)
 
     client = AsyncOpenAI(api_key=settings.openai_api_key)
-    tools = []
-    if settings.openai_use_web_search:
-        tools.append(
-            {
-                "type": "web_search",
-                "search_context_size": settings.openai_web_search_context,
-            }
-        )
-
-    response = await client.responses.create(
-        model=settings.openai_model,
-        instructions=SYSTEM_PROMPT,
-        input=user_prompt,
-        tools=tools,
-        max_tool_calls=settings.openai_max_tool_calls,
-        temperature=0.45,
-    )
-    raw = response.output_text or "{}"
+    raw, citations, api_mode = await _generate_briefing_json(client, user_prompt)
     data = json.loads(raw)
-    citations = _extract_citations(response)
 
     sports_angles = validate_sports_angles(data.get("sports_angles", []), odds, sports_posts)
     data["sports_angles"] = [angle.model_dump(mode="json") for angle in sports_angles]
@@ -408,7 +431,8 @@ async def synthesize_briefing(
     }
     data["research_metadata"] = {
         "model": settings.openai_model,
-        "web_search_enabled": settings.openai_use_web_search,
+        "api_mode": api_mode,
+        "web_search_enabled": settings.openai_use_web_search and api_mode == "responses",
         "stock_packet_size": len(json.dumps(stock_packet)),
         "sports_packet_size": len(json.dumps(sports_packet)),
         "validated_sports_angles": len(sports_angles),
