@@ -6,35 +6,38 @@ interface ScoreBadgeProps {
 
 export function ScoreBadge({ label, score, max = 10 }: ScoreBadgeProps) {
   const pct = score / max
-  const color =
+  const tone =
     pct >= 0.8
-      ? 'text-fuchsia-400 border-fuchsia-500/40'
-      : pct >= 0.6
-        ? 'text-terminal-red border-terminal-red/40'
-        : pct >= 0.4
-          ? 'text-terminal-yellow border-terminal-yellow/40'
-          : 'text-terminal-muted border-terminal-border'
+      ? 'bg-research-green-soft text-research-green'
+      : pct >= 0.5
+        ? 'bg-research-amber-soft text-research-amber'
+        : 'bg-research-bg text-research-muted'
 
   return (
     <span
-      className={`inline-flex items-center gap-1 rounded border bg-terminal-bg px-1.5 py-0.5 font-mono text-[10px] ${color}`}
+      className={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 font-mono text-xs font-semibold tabular-nums ${tone}`}
     >
       <span className="opacity-70">{label}</span>
-      <span className="font-bold">{score}</span>
+      {score}
     </span>
   )
 }
 
 export function DirectionBadge({ direction }: { direction: string }) {
-  const colors: Record<string, string> = {
-    bullish: 'text-terminal-green',
-    bearish: 'text-terminal-red',
-    volatility: 'text-terminal-cyan',
-    mixed: 'text-terminal-yellow',
-    neutral: 'text-terminal-muted',
+  const styles: Record<string, string> = {
+    bullish: 'bg-research-green-soft text-research-green',
+    bearish: 'bg-research-red-soft text-research-red',
+    volatility: 'bg-research-blue-soft text-research-blue',
+    mixed: 'bg-research-amber-soft text-research-amber',
+    neutral: 'bg-research-bg text-research-muted',
   }
+
   return (
-    <span className={`text-[10px] uppercase font-semibold ${colors[direction] || colors.neutral}`}>
+    <span
+      className={`rounded-md px-1.5 py-0.5 text-xs font-semibold capitalize ${
+        styles[direction] || styles.neutral
+      }`}
+    >
       {direction}
     </span>
   )

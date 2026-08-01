@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import type { SportsAngle } from '../types'
 import { DegenScore } from './DegenScore'
 
@@ -7,71 +8,76 @@ interface SportsStripProps {
 
 export function SportsStrip({ angles }: SportsStripProps) {
   const sorted = [...angles].sort((a, b) => b.degen_score - a.degen_score)
+  const [openKey, setOpenKey] = useState<string | null>(null)
 
   if (sorted.length === 0) {
     return (
-      <section className="rounded-lg border border-terminal-border bg-terminal-panel p-5">
-        <h2 className="mb-2 text-sm font-semibold uppercase tracking-wider text-terminal-muted">
-          Sports Angles
-        </h2>
-        <p className="text-sm text-gray-500">
-          No sports data yet. Add ODDS_API_KEY to .env for live odds, or run research to pull
-          sportsbook Reddit chatter.
-        </p>
-      </section>
+      <div className="rounded-2xl bg-research-bg px-6 py-12 text-center text-sm text-research-muted">
+        No sports angles in today’s briefing.
+      </div>
     )
   }
 
   return (
-    <section>
-      <h2 className="mb-4 text-sm font-semibold uppercase tracking-wider text-terminal-muted">
-        Sports Angles
-      </h2>
-      <div className="grid gap-4 md:grid-cols-2">
-        {sorted.map((angle, i) => (
-          <article
-            key={`${angle.matchup}-${i}`}
-            className="rounded-lg border border-terminal-border bg-terminal-panel p-4"
-          >
-            <div className="mb-2 flex items-start justify-between gap-2">
+    <div className="rounded-2xl bg-research-surface px-4 shadow-soft sm:px-5">
+      {sorted.map((angle, i) => {
+        const key = `${angle.matchup}-${i}`
+        const open = openKey === key
+        return (
+          <article key={key} className="border-b border-research-line last:border-b-0">
+            <button
+              type="button"
+              onClick={() => setOpenKey(open ? null : key)}
+              className="flex w-full items-start justify-between gap-4 px-1 py-4 text-left"
+            >
               <div>
-                <span className="text-xs uppercase text-terminal-yellow">{angle.sport}</span>
-                <h3 className="font-bold text-white">{angle.title}</h3>
-                <p className="text-xs text-terminal-muted">{angle.matchup}</p>
+                <p className="text-xs font-medium uppercase tracking-wide text-research-muted">
+                  {angle.sport}
+                </p>
+                <h3 className="mt-1 text-[15px] font-semibold text-research-ink">{angle.title}</h3>
+                <p className="mt-0.5 text-sm text-research-muted">{angle.matchup}</p>
+                {!open && (
+                  <p className="mt-2 line-clamp-2 text-sm text-research-muted">{angle.narrative}</p>
+                )}
               </div>
               <DegenScore score={angle.degen_score} size="sm" />
-            </div>
-            {angle.why_now && (
-              <p className="mb-2 text-xs text-terminal-yellow">Why now: {angle.why_now}</p>
-            )}
-            <p className="mb-2 text-sm text-gray-300">{angle.narrative}</p>
-            {angle.line_note && (
-              <p className="mb-1 text-xs text-terminal-cyan">Line: {angle.line_note}</p>
-            )}
-            {angle.priced_in && (
-              <p className="mb-1 text-xs text-gray-500">Priced in: {angle.priced_in}</p>
-            )}
-            {angle.sources.length > 0 && (
-              <div className="mt-3 border-t border-terminal-border pt-2">
-                <p className="mb-1 text-[10px] uppercase text-terminal-muted">Sources</p>
-                <div className="flex flex-col gap-1">
-                  {angle.sources.map((source, idx) => (
-                    <a
-                      key={`${source.url}-${idx}`}
-                      href={source.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-xs text-terminal-cyan hover:underline"
-                    >
-                      [{source.source_type}] {source.title.slice(0, 80)}
-                    </a>
-                  ))}
-                </div>
+            </button>
+
+            {open && (
+              <div className="animate-fade-up space-y-3 px-1 pb-5">
+                {angle.why_now && (
+                  <p className="text-sm text-research-muted">
+                    <span className="font-semibold text-research-ink">Why now · </span>
+                    {angle.why_now}
+                  </p>
+                )}
+                <p className="text-sm leading-6 text-research-ink">{angle.narrative}</p>
+                {angle.line_note && (
+                  <p className="text-sm text-research-muted">Line · {angle.line_note}</p>
+                )}
+                {angle.priced_in && (
+                  <p className="text-sm text-research-muted">Priced in · {angle.priced_in}</p>
+                )}
+                {angle.sources.length > 0 && (
+                  <div className="flex flex-wrap gap-x-4 gap-y-1">
+                    {angle.sources.map((source, idx) => (
+                      <a
+                        key={`${source.url}-${idx}`}
+                        href={source.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-xs font-medium text-research-blue hover:underline"
+                      >
+                        {source.title.slice(0, 60)}
+                      </a>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
           </article>
-        ))}
-      </div>
-    </section>
+        )
+      })}
+    </div>
   )
 }

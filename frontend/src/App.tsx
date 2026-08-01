@@ -7,31 +7,29 @@ import { TodayPage } from './pages/TodayPage'
 
 const navClass = ({ isActive }: { isActive: boolean }) =>
   isActive
-    ? 'rounded-md bg-terminal-green/10 px-3 py-1.5 font-semibold text-terminal-green'
-    : 'rounded-md px-3 py-1.5 text-slate-300 transition hover:bg-white/5 hover:text-white'
+    ? 'text-research-ink after:absolute after:inset-x-0 after:-bottom-[13px] after:h-0.5 after:rounded-full after:bg-research-green'
+    : 'text-research-muted hover:text-research-ink'
 
 export function App() {
   return (
-    <div className="min-h-screen bg-transparent font-sans text-slate-100">
-      <header className="border-b border-terminal-border bg-terminal-panel/90 shadow-lg shadow-black/20 backdrop-blur">
-        <div className="mx-auto flex max-w-[1600px] items-center justify-between px-5 py-4">
-          <div>
-            <NavLink to="/" className="font-mono text-lg font-bold tracking-wide text-terminal-green">
-              DEGEN CATALYST
-            </NavLink>
-            <p className="mt-0.5 text-[10px] text-terminal-muted">
-              signal-first intelligence · options · sports · not financial advice
-            </p>
-          </div>
-          <nav className="flex gap-1 text-xs">
-            <NavLink to="/" className={navClass} end>
-              Terminal
+    <div className="min-h-screen font-sans text-research-ink">
+      <header className="sticky top-0 z-40 border-b border-research-line/80 bg-research-surface/90 backdrop-blur-md">
+        <div className="mx-auto flex max-w-5xl items-center justify-between px-5 py-3.5">
+          <NavLink to="/" className="group">
+            <span className="text-lg font-semibold tracking-tight text-research-ink transition group-hover:text-research-green">
+              Catalyst
+            </span>
+            <span className="ml-2 text-sm font-medium text-research-muted">Research</span>
+          </NavLink>
+          <nav className="flex gap-6 text-sm font-medium">
+            <NavLink to="/" className={({ isActive }) => `relative ${navClass({ isActive })}`} end>
+              Today
             </NavLink>
             <NavLink to="/sports" className={navClass}>
               Sports
             </NavLink>
             <NavLink to="/history" className={navClass}>
-              History
+              Archive
             </NavLink>
           </nav>
         </div>
@@ -39,7 +37,7 @@ export function App() {
 
       <MarketPulseBar />
 
-      <main className="mx-auto max-w-[1600px] px-5 py-6">
+      <main className="mx-auto max-w-5xl px-5 py-8">
         <Routes>
           <Route path="/" element={<TodayPage />} />
           <Route path="/sports" element={<SportsBoardPage />} />
@@ -48,8 +46,8 @@ export function App() {
         </Routes>
       </main>
 
-      <footer className="mt-6 border-t border-terminal-border py-4 text-center text-[10px] text-terminal-muted">
-        Entertainment only. Observations separated from trade ideas. Data may be delayed.
+      <footer className="mx-auto max-w-5xl px-5 pb-10 pt-4 text-center text-xs text-research-muted">
+        For research and entertainment only. Not financial advice. Data may be delayed.
       </footer>
     </div>
   )

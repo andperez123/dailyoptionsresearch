@@ -27,10 +27,10 @@ export function HistoryDetailPage() {
   if (error) {
     return (
       <div>
-        <Link to="/history" className="text-sm text-terminal-cyan hover:underline">
-          ← Back to history
+        <Link to="/history" className="text-sm font-medium text-research-blue hover:underline">
+          ← Archive
         </Link>
-        <p className="mt-4 text-terminal-red">{error}</p>
+        <p className="mt-4 text-research-red">{error}</p>
       </div>
     )
   }
@@ -38,43 +38,47 @@ export function HistoryDetailPage() {
   if (!briefing) {
     return (
       <div className="flex min-h-[40vh] items-center justify-center">
-        <p className="animate-pulse font-mono text-terminal-green">Loading...</p>
+        <p className="animate-pulse text-sm text-research-muted">Loading…</p>
       </div>
     )
   }
 
   return (
-    <div className="space-y-6">
-      <Link to="/history" className="text-sm text-terminal-cyan hover:underline">
-        ← Back to history
-      </Link>
+    <div className="animate-fade-up space-y-8">
       <div>
-        <h1 className="text-2xl font-bold">{briefing.briefing_date}</h1>
-        <p className="text-sm text-terminal-muted">
+        <Link to="/history" className="text-sm font-medium text-research-blue hover:underline">
+          ← Archive
+        </Link>
+        <h1 className="mt-3 font-mono text-3xl font-semibold tracking-tight">
+          {briefing.briefing_date}
+        </h1>
+        <p className="mt-1 text-sm text-research-muted">
           Generated {new Date(briefing.content.generated_at).toLocaleString()}
+        </p>
+        <p className="mt-4 max-w-2xl text-base leading-7 text-research-muted">
+          {briefing.content.summary}
         </p>
       </div>
 
-      <section className="rounded-lg border border-terminal-border bg-terminal-panel p-5">
-        <p className="text-lg text-gray-200">{briefing.content.summary}</p>
+      <section className="rounded-2xl bg-research-surface px-4 shadow-soft sm:px-5">
+        {briefing.content.narratives.map((n) => (
+          <NarrativeCard key={`${n.title}-${n.tickers.join('-')}`} narrative={n} />
+        ))}
       </section>
 
-      <div className="grid gap-6 lg:grid-cols-[1fr_280px]">
-        <div className="space-y-6">
-          <section>
-            <h2 className="mb-4 text-sm font-semibold uppercase tracking-wider text-terminal-muted">
-              Narratives
-            </h2>
-            <div className="space-y-4">
-              {briefing.content.narratives.map((n) => (
-                <NarrativeCard key={`${n.title}-${n.tickers.join('-')}`} narrative={n} />
-              ))}
-            </div>
-          </section>
+      {briefing.content.sports_angles.length > 0 && (
+        <section>
+          <h2 className="mb-3 text-sm font-semibold text-research-muted">Sports angles</h2>
           <SportsStrip angles={briefing.content.sports_angles} />
-        </div>
-        <RadarSidebar items={briefing.content.radar} />
-      </div>
+        </section>
+      )}
+
+      {briefing.content.radar.length > 0 && (
+        <section className="rounded-2xl bg-research-surface px-4 shadow-soft sm:px-5">
+          <h2 className="border-b border-research-line px-1 py-4 text-sm font-semibold">Buzz</h2>
+          <RadarSidebar items={briefing.content.radar} />
+        </section>
+      )}
     </div>
   )
 }

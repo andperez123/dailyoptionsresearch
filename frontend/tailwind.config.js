@@ -4,20 +4,43 @@ export default {
   theme: {
     extend: {
       colors: {
-        terminal: {
-          bg: '#080C14',
-          panel: '#111827',
-          border: '#2A3A52',
-          green: '#5EE9A6',
-          red: '#FF718A',
-          yellow: '#F6C85F',
-          cyan: '#65D9F3',
-          muted: '#9AA9BF',
+        research: {
+          bg: '#F4F6F4',
+          surface: '#FFFFFF',
+          ink: '#0B1410',
+          muted: '#5C6B62',
+          line: '#E3E8E4',
+          green: '#00C805',
+          'green-soft': '#E8F9E9',
+          red: '#F45531',
+          'red-soft': '#FDECE8',
+          amber: '#C47F17',
+          'amber-soft': '#FBF3E4',
+          blue: '#1A6BFF',
+          'blue-soft': '#EAF0FF',
         },
       },
       fontFamily: {
-        mono: ['JetBrains Mono', 'Fira Code', 'Consolas', 'monospace'],
-        sans: ['Inter', 'ui-sans-serif', 'system-ui', 'sans-serif'],
+        sans: ['"DM Sans"', 'ui-sans-serif', 'system-ui', 'sans-serif'],
+        mono: ['"IBM Plex Mono"', 'ui-monospace', 'monospace'],
+      },
+      boxShadow: {
+        soft: '0 1px 2px rgb(11 20 16 / 0.04), 0 8px 24px rgb(11 20 16 / 0.04)',
+        sheet: '0 16px 48px rgb(11 20 16 / 0.12)',
+      },
+      keyframes: {
+        'fade-up': {
+          from: { opacity: '0', transform: 'translateY(6px)' },
+          to: { opacity: '1', transform: 'translateY(0)' },
+        },
+        'slide-in': {
+          from: { opacity: '0', transform: 'translateX(16px)' },
+          to: { opacity: '1', transform: 'translateX(0)' },
+        },
+      },
+      animation: {
+        'fade-up': 'fade-up 280ms ease-out',
+        'slide-in': 'slide-in 280ms ease-out',
       },
     },
   },

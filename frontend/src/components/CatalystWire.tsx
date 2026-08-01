@@ -15,39 +15,45 @@ export function CatalystWire({ onTickerClick }: CatalystWireProps) {
   const [scanning, setScanning] = useState(false)
   const [feedbackState, setFeedbackState] = useState<Record<number, string>>({})
   const [minImpact, setMinImpact] = useState(5)
-  const [minConfidence, setMinConfidence] = useState(5)
   const [direction, setDirection] = useState('')
   const requestId = useRef(0)
 
-  const load = useCallback(async (signal?: AbortSignal) => {
-    const currentRequest = ++requestId.current
-    setLoading(true)
-    try {
-      const data = await getWire(
-        {
-          page: 1,
-          page_size: 40,
-          min_impact: minImpact,
-          min_confidence: minConfidence,
-          ...(direction ? { direction } : {}),
-        },
-        signal,
-      )
-      if (currentRequest === requestId.current) {
-        setItems(data.items)
-        setTotal(data.total)
-        setError(null)
+  const load = useCallback(
+    async (signal?: AbortSignal) => {
+      const currentRequest = ++requestId.current
+      setLoading(true)
+      try {
+        const data = await getWire(
+          {
+            page: 1,
+            page_size: 40,
+            min_impact: minImpact,
+            min_confidence: 5,
+            ...(direction ? { direction } : {}),
+          },
+          signal,
+        )
+        if (currentRequest === requestId.current) {
+          setItems(data.items)
+          setTotal(data.total)
+          setError(null)
+        }
+      } catch (err) {
+        if (
+          err instanceof Error &&
+          err.name !== 'AbortError' &&
+          currentRequest === requestId.current
+        ) {
+          setError(err.message)
+        }
+      } finally {
+        if (currentRequest === requestId.current) {
+          setLoading(false)
+        }
       }
-    } catch (err) {
-      if (err instanceof Error && err.name !== 'AbortError' && currentRequest === requestId.current) {
-        setError(err.message)
-      }
-    } finally {
-      if (currentRequest === requestId.current) {
-        setLoading(false)
-      }
-    }
-  }, [minImpact, minConfidence, direction])
+    },
+    [minImpact, direction],
+  )
 
   useEffect(() => {
     const controller = new AbortController()
@@ -82,80 +88,62 @@ export function CatalystWire({ onTickerClick }: CatalystWireProps) {
 
   return (
     <section>
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h2 className="text-sm font-semibold uppercase tracking-wider text-terminal-muted">
-            Live Catalyst Wire
-          </h2>
-          <p className="text-[10px] text-terminal-muted">
-            Signals ranked by impact + confidence · showing {items.length} of {total}
-          </p>
+      <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+        <p className="text-sm text-research-muted">
+          {loading ? 'Loading…' : `${items.length} of ${total} signals`}
+        </p>
+        <div className="flex flex-wrap items-center gap-2">
+          <select
+            value={String(minImpact)}
+            onChange={(e) => setMinImpact(Number(e.target.value))}
+            className="rounded-full border border-research-line bg-research-surface px-3 py-1.5 text-xs font-medium text-research-ink"
+          >
+            <option value={0}>All impact</option>
+            <option value={5}>Impact ≥ 5</option>
+            <option value={7}>Impact ≥ 7</option>
+            <option value={8}>Impact ≥ 8</option>
+          </select>
+          <select
+            value={direction}
+            onChange={(e) => setDirection(e.target.value)}
+            className="rounded-full border border-research-line bg-research-surface px-3 py-1.5 text-xs font-medium text-research-ink"
+          >
+            <option value="">All directions</option>
+            <option value="bullish">Bullish</option>
+            <option value="bearish">Bearish</option>
+            <option value="volatility">Volatility</option>
+            <option value="mixed">Mixed</option>
+          </select>
+          <button
+            type="button"
+            onClick={handleScan}
+            disabled={scanning}
+            className="rounded-full bg-research-ink px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-research-ink/90 disabled:opacity-50"
+          >
+            {scanning ? 'Scanning…' : 'Scan'}
+          </button>
         </div>
-        <button
-          onClick={handleScan}
-          disabled={scanning}
-          className="rounded border border-terminal-cyan/50 px-2 py-1 text-[10px] text-terminal-cyan hover:bg-terminal-cyan/10 disabled:opacity-50"
-        >
-          {scanning ? 'Scanning...' : 'Scan now'}
-        </button>
       </div>
 
       {error && (
-        <div className="mb-3 rounded border border-terminal-red/40 p-2 text-xs text-terminal-red">
+        <div className="mb-4 rounded-2xl bg-research-red-soft px-4 py-3 text-sm text-research-red">
           {error}
-          <button onClick={() => load()} className="ml-2 underline">
+          <button type="button" onClick={() => load()} className="ml-2 font-semibold underline">
             Retry
           </button>
         </div>
       )}
 
-      <div className="mb-3 flex flex-wrap gap-3 text-[10px]">
-        <label className="flex items-center gap-1 text-terminal-muted">
-          Min impact
-          <input
-            type="range"
-            min={0}
-            max={10}
-            value={minImpact}
-            onChange={(e) => setMinImpact(Number(e.target.value))}
-            className="w-20"
-          />
-          {minImpact}
-        </label>
-        <label className="flex items-center gap-1 text-terminal-muted">
-          Min confidence
-          <input
-            type="range"
-            min={0}
-            max={10}
-            value={minConfidence}
-            onChange={(e) => setMinConfidence(Number(e.target.value))}
-            className="w-20"
-          />
-          {minConfidence}
-        </label>
-        <select
-          value={direction}
-          onChange={(e) => setDirection(e.target.value)}
-          className="rounded border border-terminal-border bg-terminal-bg px-2 py-0.5 text-terminal-muted"
-        >
-          <option value="">All directions</option>
-          <option value="bullish">Bullish</option>
-          <option value="bearish">Bearish</option>
-          <option value="volatility">Volatility</option>
-          <option value="mixed">Mixed</option>
-        </select>
-      </div>
-
       {loading ? (
-        <p className="animate-pulse text-xs text-terminal-green">Loading wire...</p>
+        <p className="animate-pulse py-12 text-center text-sm text-research-muted">
+          Loading signals…
+        </p>
       ) : items.length === 0 ? (
-        <div className="rounded border border-dashed border-terminal-border p-6 text-center text-xs text-terminal-muted">
-          No catalyst signals yet. Start the worker with <code className="text-terminal-cyan">make worker</code>{' '}
-          or hit Scan now.
+        <div className="rounded-2xl bg-research-bg px-6 py-12 text-center text-sm text-research-muted">
+          No signals yet. Run a scan to pull fresh catalysts.
         </div>
       ) : (
-        <div className="space-y-2">
+        <div className="rounded-2xl bg-research-surface px-4 shadow-soft sm:px-5">
           {items.map((c) => (
             <CatalystCard
               key={c.id}

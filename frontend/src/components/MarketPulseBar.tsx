@@ -31,11 +31,11 @@ export function MarketPulseBar() {
   }, [])
 
   const statusLabel: Record<string, string> = {
-    open: 'MARKET OPEN',
-    pre_market: 'PRE-MARKET',
-    closed: 'CLOSED',
-    closed_weekend: 'WEEKEND',
-    unknown: 'UNKNOWN',
+    open: 'Open',
+    pre_market: 'Pre-market',
+    closed: 'Closed',
+    closed_weekend: 'Weekend',
+    unknown: '—',
   }
 
   const topSector = pulse?.sectors
@@ -43,42 +43,54 @@ export function MarketPulseBar() {
     .sort((a, b) => (b.pct_change ?? 0) - (a.pct_change ?? 0))[0]
 
   return (
-    <div className="border-b border-terminal-border bg-slate-950/70 px-5 py-2.5 backdrop-blur">
-      <div className="mx-auto flex max-w-[1600px] flex-wrap items-center gap-x-5 gap-y-2 font-mono text-xs">
-        <span className="rounded-full border border-terminal-green/25 bg-terminal-green/10 px-2.5 py-1 font-semibold text-terminal-green">
+    <div className="border-b border-research-line bg-research-surface">
+      <div className="mx-auto flex max-w-5xl flex-wrap items-center gap-x-6 gap-y-2 px-5 py-2.5 text-sm">
+        <span className="inline-flex items-center gap-1.5 font-medium text-research-ink">
+          <span
+            className={`h-1.5 w-1.5 rounded-full ${
+              pulse?.market_status === 'open' ? 'bg-research-green' : 'bg-research-muted'
+            }`}
+          />
           {statusLabel[pulse?.market_status || 'unknown']}
         </span>
-        {error && <span className="text-terminal-red">Pulse unavailable</span>}
+
+        {error && <span className="text-research-red">Pulse unavailable</span>}
+
         {pulse?.indices.map((idx) => (
-          <div key={idx.symbol} className="flex items-center gap-1.5">
-            <span className="font-semibold text-terminal-muted">{idx.symbol.replace('^', '')}</span>
-            <span className="font-bold text-white">{idx.price?.toFixed(2) ?? '—'}</span>
+          <div key={idx.symbol} className="flex items-baseline gap-1.5">
+            <span className="text-research-muted">{idx.symbol.replace('^', '')}</span>
+            <span className="font-mono text-[13px] font-semibold tabular-nums">
+              {idx.price?.toFixed(2) ?? '—'}
+            </span>
             <span
-              className={
-                (idx.pct_change ?? 0) >= 0 ? 'text-terminal-green' : 'text-terminal-red'
-              }
+              className={`font-mono text-[13px] font-semibold tabular-nums ${
+                (idx.pct_change ?? 0) >= 0 ? 'text-research-green' : 'text-research-red'
+              }`}
             >
               {(idx.pct_change ?? 0) >= 0 ? '+' : ''}
               {idx.pct_change?.toFixed(2) ?? '—'}%
             </span>
           </div>
         ))}
+
         {topSector && (
-          <div className="text-terminal-muted">
-            Top sector <span className="text-terminal-cyan">{topSector.symbol}</span>{' '}
+          <div className="flex items-baseline gap-1.5 text-research-muted">
+            <span>Lead</span>
+            <span className="font-medium text-research-ink">{topSector.symbol}</span>
             <span
-              className={
-                (topSector.pct_change ?? 0) >= 0 ? 'text-terminal-green' : 'text-terminal-red'
-              }
+              className={`font-mono text-[13px] font-semibold tabular-nums ${
+                (topSector.pct_change ?? 0) >= 0 ? 'text-research-green' : 'text-research-red'
+              }`}
             >
               {(topSector.pct_change ?? 0) >= 0 ? '+' : ''}
               {topSector.pct_change?.toFixed(2)}%
             </span>
           </div>
         )}
-        <span className="ml-auto text-[10px] text-slate-400">
-          Updated {pulse ? formatTime(pulse.data_freshness) : '—'}
-          {pulse?.provider_warnings?.length ? ' · delayed data' : ''}
+
+        <span className="ml-auto text-xs text-research-muted">
+          {pulse ? formatTime(pulse.data_freshness) : '—'}
+          {pulse?.provider_warnings?.length ? ' · delayed' : ''}
         </span>
       </div>
     </div>

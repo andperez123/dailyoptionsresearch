@@ -4,23 +4,22 @@ interface DegenScoreProps {
 }
 
 export function DegenScore({ score, size = 'md' }: DegenScoreProps) {
-  const colors = [
-    'text-terminal-muted',
-    'text-green-400',
-    'text-terminal-yellow',
-    'text-orange-400',
-    'text-terminal-red',
-    'text-fuchsia-400',
-  ]
-  const color = colors[Math.min(Math.max(score, 1), 5)]
+  const clamped = Math.min(Math.max(score, 0), 5)
   const textSize = size === 'sm' ? 'text-xs' : 'text-sm'
 
   return (
-    <span
-      className={`inline-flex items-center gap-1 rounded border border-terminal-border bg-terminal-panel px-2 py-0.5 font-mono ${textSize} ${color}`}
-    >
-      <span className="opacity-60">DEGEN</span>
-      <span className="font-bold">{score}/5</span>
+    <span className={`inline-flex items-center gap-1.5 ${textSize}`}>
+      <span className="flex gap-0.5" aria-label={`Conviction ${clamped} of 5`}>
+        {Array.from({ length: 5 }, (_, i) => (
+          <span
+            key={i}
+            className={`h-1.5 w-1.5 rounded-full ${
+              i < clamped ? 'bg-research-green' : 'bg-research-line'
+            }`}
+          />
+        ))}
+      </span>
+      <span className="font-mono font-semibold tabular-nums text-research-muted">{clamped}/5</span>
     </span>
   )
 }

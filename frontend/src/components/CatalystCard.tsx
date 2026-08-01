@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import type { ScoredCatalyst } from '../types'
 import { DirectionBadge, ScoreBadge, formatStrategy, formatTime } from './ScoreBadge'
 
@@ -14,96 +15,131 @@ export function CatalystCard({
   onFeedback,
   feedbackLabel,
 }: CatalystCardProps) {
+  const [open, setOpen] = useState(false)
+  const thesis = catalyst.thesis || catalyst.summary
+
   return (
-    <article className="rounded-lg border border-terminal-border bg-terminal-panel p-4 text-sm shadow-md shadow-black/10 transition hover:-translate-y-px hover:border-terminal-cyan/40 hover:shadow-lg">
-      <div className="mb-3 flex flex-wrap items-center gap-2">
-        <ScoreBadge label="IMP" score={catalyst.impact_score} />
-        <ScoreBadge label="CONF" score={catalyst.confidence_score} />
-        <DirectionBadge direction={catalyst.direction} />
-        <span className="rounded bg-terminal-bg px-1.5 py-0.5 text-[10px] uppercase text-terminal-muted">
-          {catalyst.catalyst_type.replace(/_/g, ' ')}
-        </span>
-        <span className="text-[10px] text-terminal-muted">{catalyst.half_life.replace(/_/g, ' ')}</span>
-        {!catalyst.scored && (
-          <span className="text-[10px] text-terminal-yellow">unscored</span>
-        )}
-      </div>
-
-      <h3 className="mb-1.5 text-[15px] font-semibold leading-snug text-white">{catalyst.headline}</h3>
-      <p className="mb-3 text-sm leading-6 text-slate-300">{catalyst.thesis || catalyst.summary}</p>
-
-      {catalyst.current_market_reaction && (
-        <p className="mb-2 text-[11px] text-terminal-cyan">
-          Market: {catalyst.current_market_reaction}
-        </p>
-      )}
-
-      {(catalyst.confirmation_signals.length > 0 || catalyst.invalidation_signals.length > 0) && (
-        <div className="mb-3 space-y-1.5 rounded-md bg-terminal-bg/50 p-2.5 text-xs leading-relaxed">
-          {catalyst.confirmation_signals.length > 0 && (
-            <p className="text-terminal-green">
-              Confirm: {catalyst.confirmation_signals.slice(0, 2).join(' · ')}
-            </p>
-          )}
-          {catalyst.invalidation_signals.length > 0 && (
-            <p className="text-terminal-red">
-              Invalidate: {catalyst.invalidation_signals.slice(0, 2).join(' · ')}
-            </p>
-          )}
-        </div>
-      )}
-
-      <div className="mb-2 flex flex-wrap gap-1">
-        {catalyst.primary_ticker && (
-          <button
-            onClick={() => onTickerClick(catalyst.primary_ticker!)}
-            className="rounded-md border border-terminal-yellow/20 bg-terminal-yellow/10 px-2 py-0.5 font-mono text-xs font-semibold text-terminal-yellow hover:bg-terminal-yellow/20"
-          >
-            ${catalyst.primary_ticker}
-          </button>
-        )}
-        {catalyst.related_tickers
-          .filter((t) => t !== catalyst.primary_ticker)
-          .map((t) => (
-            <button
-              key={t}
-              onClick={() => onTickerClick(t)}
-              className="rounded-md border border-terminal-cyan/20 bg-terminal-cyan/10 px-2 py-0.5 font-mono text-xs font-semibold text-terminal-cyan hover:bg-terminal-cyan/20"
-            >
-              ${t}
-            </button>
-          ))}
-      </div>
-
-      <div className="mb-2 flex flex-wrap items-center gap-2 text-[10px] text-terminal-muted">
-        <span>{formatStrategy(catalyst.strategy_classification)}</span>
-        <span>·</span>
-        <span>{catalyst.supporting_source_count} source(s)</span>
-        <span>·</span>
-        <a
-          href={catalyst.source_url}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-terminal-cyan hover:underline"
+    <article className="border-b border-research-line last:border-b-0">
+      <div className="flex items-start gap-3 px-1 py-4">
+        <button
+          type="button"
+          onClick={() => setOpen(!open)}
+          className="min-w-0 flex-1 text-left"
         >
-          {catalyst.source_name} · {formatTime(catalyst.published_at)}
-        </a>
+          <div className="mb-2 flex flex-wrap items-center gap-1.5">
+            <ScoreBadge label="IMP" score={catalyst.impact_score} />
+            <ScoreBadge label="CONF" score={catalyst.confidence_score} />
+            <DirectionBadge direction={catalyst.direction} />
+          </div>
+          <h3 className="text-[15px] font-semibold leading-snug text-research-ink">
+            {catalyst.headline}
+          </h3>
+          {!open && thesis && (
+            <p className="mt-1 line-clamp-2 text-sm leading-relaxed text-research-muted">{thesis}</p>
+          )}
+        </button>
+
+        <div className="flex shrink-0 flex-col items-end gap-2">
+          {catalyst.primary_ticker && (
+            <button
+              type="button"
+              onClick={() => onTickerClick(catalyst.primary_ticker!)}
+              className="rounded-full bg-research-green-soft px-2.5 py-1 font-mono text-xs font-semibold text-research-green transition hover:bg-research-green hover:text-white"
+            >
+              ${catalyst.primary_ticker}
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => setOpen(!open)}
+            className="text-xs text-research-muted hover:text-research-ink"
+          >
+            {open ? 'Less' : 'More'}
+          </button>
+        </div>
       </div>
 
-      {onFeedback && (
-        <div className="flex items-center gap-2 border-t border-terminal-border pt-2">
-          {['useful', 'noise'].map((label) => (
-            <button
-              key={label}
-              onClick={() => onFeedback(catalyst.id, label)}
-              disabled={Boolean(feedbackLabel)}
-              className="text-[10px] uppercase text-terminal-muted hover:text-terminal-green disabled:opacity-50"
+      {open && (
+        <div className="animate-fade-up space-y-3 px-1 pb-5">
+          {thesis && <p className="text-sm leading-6 text-research-ink">{thesis}</p>}
+
+          {catalyst.current_market_reaction && (
+            <p className="text-sm text-research-muted">
+              Market · {catalyst.current_market_reaction}
+            </p>
+          )}
+
+          {(catalyst.confirmation_signals.length > 0 ||
+            catalyst.invalidation_signals.length > 0) && (
+            <div className="grid gap-2 sm:grid-cols-2">
+              {catalyst.confirmation_signals.length > 0 && (
+                <div className="rounded-xl bg-research-green-soft/60 px-3 py-2.5 text-sm">
+                  <p className="mb-1 text-xs font-semibold text-research-green">Confirm</p>
+                  <p className="text-research-ink">
+                    {catalyst.confirmation_signals.slice(0, 2).join(' · ')}
+                  </p>
+                </div>
+              )}
+              {catalyst.invalidation_signals.length > 0 && (
+                <div className="rounded-xl bg-research-red-soft/60 px-3 py-2.5 text-sm">
+                  <p className="mb-1 text-xs font-semibold text-research-red">Invalidate</p>
+                  <p className="text-research-ink">
+                    {catalyst.invalidation_signals.slice(0, 2).join(' · ')}
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+
+          {catalyst.related_tickers.filter((t) => t !== catalyst.primary_ticker).length > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              {catalyst.related_tickers
+                .filter((t) => t !== catalyst.primary_ticker)
+                .map((t) => (
+                  <button
+                    key={t}
+                    type="button"
+                    onClick={() => onTickerClick(t)}
+                    className="rounded-full bg-research-bg px-2.5 py-1 font-mono text-xs font-semibold text-research-ink hover:bg-research-line"
+                  >
+                    ${t}
+                  </button>
+                ))}
+            </div>
+          )}
+
+          <div className="flex flex-wrap items-center gap-2 text-xs text-research-muted">
+            <span>{formatStrategy(catalyst.strategy_classification)}</span>
+            <span>·</span>
+            <span>{catalyst.catalyst_type.replace(/_/g, ' ')}</span>
+            <span>·</span>
+            <a
+              href={catalyst.source_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="font-medium text-research-blue hover:underline"
             >
-              {label}
-            </button>
-          ))}
-          {feedbackLabel && (
-            <span className="text-[10px] text-terminal-green">Marked {feedbackLabel}</span>
+              {catalyst.source_name} · {formatTime(catalyst.published_at)}
+            </a>
+          </div>
+
+          {onFeedback && (
+            <div className="flex items-center gap-3 pt-1">
+              {['useful', 'noise'].map((label) => (
+                <button
+                  key={label}
+                  type="button"
+                  onClick={() => onFeedback(catalyst.id, label)}
+                  disabled={Boolean(feedbackLabel)}
+                  className="text-xs font-medium capitalize text-research-muted hover:text-research-ink disabled:opacity-40"
+                >
+                  {label}
+                </button>
+              ))}
+              {feedbackLabel && (
+                <span className="text-xs text-research-green">Marked {feedbackLabel}</span>
+              )}
+            </div>
           )}
         </div>
       )}

@@ -48,155 +48,191 @@ export function DeepDiveDrawer({ ticker, onClose }: DeepDiveDrawerProps) {
 
   if (!ticker) return null
 
+  const pct = data?.price_snapshot?.pct_change
+  const up = (pct ?? 0) >= 0
+
   return (
-    <div className="fixed inset-0 z-50 flex justify-end bg-black/60" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex justify-end bg-research-ink/20 backdrop-blur-[2px]" onClick={onClose}>
       <div
         role="dialog"
         aria-modal="true"
-        aria-label={`${ticker} deep dive`}
-        className="h-full w-full max-w-lg overflow-y-auto border-l border-terminal-border bg-terminal-bg p-4 shadow-2xl"
+        aria-label={`${ticker} research`}
+        className="animate-slide-in h-full w-full max-w-md overflow-y-auto bg-research-surface shadow-sheet"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-lg font-bold text-terminal-green">${ticker}</h2>
+        <div className="sticky top-0 z-10 flex items-center justify-between border-b border-research-line bg-research-surface/95 px-5 py-4 backdrop-blur">
+          <h2 className="font-mono text-xl font-bold tracking-tight">${ticker}</h2>
           <button
+            type="button"
             onClick={onClose}
-            aria-label="Close deep dive"
-            className="text-terminal-muted hover:text-white"
+            aria-label="Close"
+            className="rounded-full px-2 py-1 text-sm text-research-muted hover:bg-research-bg hover:text-research-ink"
           >
-            ✕
+            Close
           </button>
         </div>
 
-        {loading && <p className="animate-pulse text-sm text-terminal-green">Loading deep dive...</p>}
-        {error && <p className="text-sm text-terminal-red">{error}</p>}
+        <div className="space-y-6 px-5 py-6">
+          {loading && (
+            <p className="animate-pulse text-sm text-research-muted">Loading research…</p>
+          )}
+          {error && <p className="text-sm text-research-red">{error}</p>}
 
-        {data && (
-          <div className="space-y-4 text-sm">
-            <section className="rounded border border-terminal-border p-3">
-              <p className="mb-2 text-[10px] uppercase text-terminal-muted">Market data</p>
-              {data.price_snapshot ? (
-                <div className="font-mono">
-                  <span className="text-xl font-bold">${data.price_snapshot.price?.toFixed(2)}</span>
-                  <span
-                    className={`ml-2 ${(data.price_snapshot.pct_change ?? 0) >= 0 ? 'text-terminal-green' : 'text-terminal-red'}`}
-                  >
-                    {(data.price_snapshot.pct_change ?? 0) >= 0 ? '+' : ''}
-                    {data.price_snapshot.pct_change?.toFixed(2)}%
-                  </span>
-                  {data.price_snapshot.relative_volume != null && (
-                    <span className="ml-2 text-terminal-muted">
-                      Rel vol {data.price_snapshot.relative_volume}x
-                    </span>
-                  )}
-                  <p className="mt-1 text-[10px] text-terminal-muted">
-                    As of {formatTime(data.price_snapshot.snapshot_at)} via {data.price_snapshot.provider}
-                  </p>
-                </div>
-              ) : (
-                <p className="text-terminal-muted">No price data</p>
-              )}
-            </section>
-
-            <section className="rounded border border-terminal-border p-3">
-              <p className="mb-2 text-[10px] uppercase text-terminal-muted">Options metrics</p>
-              <div className="space-y-1 text-xs text-gray-400">
-                <p>Nearest expiry: {data.options_snapshot.nearest_expiry || '—'}</p>
-                <p>Avg IV: {data.options_snapshot.avg_iv != null ? String(data.options_snapshot.avg_iv) : '—'}</p>
-                <p>
-                  P/C vol ratio:{' '}
-                  {data.options_snapshot.put_call_volume_ratio != null
-                    ? String(data.options_snapshot.put_call_volume_ratio)
-                    : '—'}
-                </p>
-              </div>
-            </section>
-
-            {data.social_momentum.mention_count != null && (
-              <section className="rounded border border-terminal-border p-3">
-                <p className="mb-2 text-[10px] uppercase text-terminal-muted">Social momentum</p>
-                <p className="text-xs text-gray-400">
-                  Mentions: {data.social_momentum.mention_count}
-                  {data.social_momentum.note ? ` · ${data.social_momentum.note}` : ''}
-                </p>
-              </section>
-            )}
-
-            {(data.bull_case || data.bear_case || data.ai_analysis) && (
-              <section className="rounded border border-terminal-yellow/30 bg-terminal-panel p-3">
-                <p className="mb-2 text-[10px] uppercase text-terminal-yellow">AI interpretation</p>
-                {data.ai_analysis && <p className="mb-2 text-xs text-gray-300">{data.ai_analysis}</p>}
-                {data.bull_case && (
-                  <p className="text-xs text-green-400">
-                    <span className="font-semibold">Bull:</span> {data.bull_case}
-                  </p>
-                )}
-                {data.bear_case && (
-                  <p className="mt-1 text-xs text-red-400">
-                    <span className="font-semibold">Bear:</span> {data.bear_case}
-                  </p>
-                )}
-                <p className="mt-2 text-[10px] text-terminal-muted">
-                  Generated {formatTime(data.generated_at)}
-                </p>
-              </section>
-            )}
-
-            {(data.confirmation_levels.length > 0 || data.invalidation_levels.length > 0) && (
-              <section className="rounded border border-terminal-border p-3">
-                <p className="mb-2 text-[10px] uppercase text-terminal-muted">Levels</p>
-                {data.confirmation_levels.length > 0 && (
-                  <ul className="mb-2 list-disc pl-4 text-xs text-green-400">
-                    {data.confirmation_levels.map((level) => (
-                      <li key={level}>{level}</li>
-                    ))}
-                  </ul>
-                )}
-                {data.invalidation_levels.length > 0 && (
-                  <ul className="list-disc pl-4 text-xs text-red-400">
-                    {data.invalidation_levels.map((level) => (
-                      <li key={level}>{level}</li>
-                    ))}
-                  </ul>
+          {data && (
+            <>
+              <section>
+                {data.price_snapshot ? (
+                  <div>
+                    <p className="font-mono text-4xl font-semibold tracking-tight tabular-nums">
+                      ${data.price_snapshot.price?.toFixed(2)}
+                    </p>
+                    <p
+                      className={`mt-1 font-mono text-lg font-semibold tabular-nums ${
+                        up ? 'text-research-green' : 'text-research-red'
+                      }`}
+                    >
+                      {up ? '+' : ''}
+                      {pct?.toFixed(2)}%
+                      {data.price_snapshot.relative_volume != null && (
+                        <span className="ml-2 text-sm font-medium text-research-muted">
+                          {data.price_snapshot.relative_volume}x vol
+                        </span>
+                      )}
+                    </p>
+                    <p className="mt-2 text-xs text-research-muted">
+                      {formatTime(data.price_snapshot.snapshot_at)} · {data.price_snapshot.provider}
+                    </p>
+                  </div>
+                ) : (
+                  <p className="text-sm text-research-muted">No price data</p>
                 )}
               </section>
-            )}
 
-            {data.upcoming_events.length > 0 && (
-              <section className="rounded border border-terminal-border p-3">
-                <p className="mb-2 text-[10px] uppercase text-terminal-muted">Upcoming events</p>
-                <ul className="space-y-1 text-xs text-gray-400">
-                  {data.upcoming_events.map((event) => (
-                    <li key={`${event.event_date}-${event.title}`}>
-                      {event.event_date} · {event.title}
-                    </li>
-                  ))}
-                </ul>
-              </section>
-            )}
-
-            {data.recent_catalysts.length > 0 && (
-              <section className="rounded border border-terminal-border p-3">
-                <p className="mb-2 text-[10px] uppercase text-terminal-muted">Recent catalysts</p>
-                <ul className="space-y-2">
-                  {data.recent_catalysts.slice(0, 5).map((c) => (
-                    <li key={c.id} className="text-xs text-gray-400">
-                      <span className="text-terminal-cyan">IMP {c.impact_score}</span> · {c.headline}
-                    </li>
-                  ))}
-                </ul>
-              </section>
-            )}
-
-            {data.data_quality_warnings.length > 0 && (
-              <section className="rounded border border-terminal-red/30 p-3 text-xs text-terminal-red">
-                {data.data_quality_warnings.map((w) => (
-                  <p key={w}>{w}</p>
+              <section className="grid grid-cols-3 gap-3">
+                {[
+                  {
+                    label: 'Expiry',
+                    value: data.options_snapshot.nearest_expiry || '—',
+                  },
+                  {
+                    label: 'Avg IV',
+                    value:
+                      data.options_snapshot.avg_iv != null
+                        ? String(data.options_snapshot.avg_iv)
+                        : '—',
+                  },
+                  {
+                    label: 'P/C',
+                    value:
+                      data.options_snapshot.put_call_volume_ratio != null
+                        ? String(data.options_snapshot.put_call_volume_ratio)
+                        : '—',
+                  },
+                ].map((stat) => (
+                  <div key={stat.label} className="rounded-2xl bg-research-bg px-3 py-3">
+                    <p className="text-xs text-research-muted">{stat.label}</p>
+                    <p className="mt-1 font-mono text-sm font-semibold tabular-nums">{stat.value}</p>
+                  </div>
                 ))}
               </section>
-            )}
-          </div>
-        )}
+
+              {(data.bull_case || data.bear_case || data.ai_analysis) && (
+                <section className="space-y-3">
+                  <h3 className="text-xs font-semibold uppercase tracking-wide text-research-muted">
+                    Interpretation
+                  </h3>
+                  {data.ai_analysis && (
+                    <p className="text-sm leading-6 text-research-ink">{data.ai_analysis}</p>
+                  )}
+                  {data.bull_case && (
+                    <div className="rounded-2xl bg-research-green-soft/70 px-4 py-3">
+                      <p className="mb-1 text-xs font-semibold text-research-green">Bull</p>
+                      <p className="text-sm leading-6">{data.bull_case}</p>
+                    </div>
+                  )}
+                  {data.bear_case && (
+                    <div className="rounded-2xl bg-research-red-soft/70 px-4 py-3">
+                      <p className="mb-1 text-xs font-semibold text-research-red">Bear</p>
+                      <p className="text-sm leading-6">{data.bear_case}</p>
+                    </div>
+                  )}
+                </section>
+              )}
+
+              {(data.confirmation_levels.length > 0 || data.invalidation_levels.length > 0) && (
+                <section className="space-y-2">
+                  <h3 className="text-xs font-semibold uppercase tracking-wide text-research-muted">
+                    Levels
+                  </h3>
+                  {data.confirmation_levels.map((level) => (
+                    <p key={level} className="text-sm text-research-green">
+                      {level}
+                    </p>
+                  ))}
+                  {data.invalidation_levels.map((level) => (
+                    <p key={level} className="text-sm text-research-red">
+                      {level}
+                    </p>
+                  ))}
+                </section>
+              )}
+
+              {data.upcoming_events.length > 0 && (
+                <section>
+                  <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-research-muted">
+                    Upcoming
+                  </h3>
+                  <ul className="space-y-2">
+                    {data.upcoming_events.map((event) => (
+                      <li
+                        key={`${event.event_date}-${event.title}`}
+                        className="flex justify-between gap-3 text-sm"
+                      >
+                        <span className="text-research-ink">{event.title}</span>
+                        <span className="shrink-0 font-mono text-xs text-research-muted">
+                          {event.event_date}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              )}
+
+              {data.recent_catalysts.length > 0 && (
+                <section>
+                  <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-research-muted">
+                    Recent catalysts
+                  </h3>
+                  <ul className="space-y-3">
+                    {data.recent_catalysts.slice(0, 5).map((c) => (
+                      <li key={c.id} className="text-sm">
+                        <span className="font-mono text-xs font-semibold text-research-green">
+                          {c.impact_score}
+                        </span>
+                        <span className="ml-2 text-research-ink">{c.headline}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              )}
+
+              {data.social_momentum.mention_count != null && (
+                <p className="text-sm text-research-muted">
+                  Mentions · {data.social_momentum.mention_count}
+                  {data.social_momentum.note ? ` · ${data.social_momentum.note}` : ''}
+                </p>
+              )}
+
+              {data.data_quality_warnings.length > 0 && (
+                <div className="rounded-2xl bg-research-amber-soft px-4 py-3 text-sm text-research-amber">
+                  {data.data_quality_warnings.map((w) => (
+                    <p key={w}>{w}</p>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+        </div>
       </div>
     </div>
   )

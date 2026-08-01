@@ -7,113 +7,130 @@ interface NarrativeCardProps {
 }
 
 export function NarrativeCard({ narrative }: NarrativeCardProps) {
-  const [expanded, setExpanded] = useState(false)
+  const [open, setOpen] = useState(false)
 
   return (
-    <article className="rounded-xl border border-terminal-border bg-slate-900/80 p-5 shadow-lg shadow-black/20">
-      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h3 className="text-xl font-bold tracking-tight text-terminal-green">{narrative.title}</h3>
-          <div className="mt-2 flex flex-wrap gap-2">
+    <article className="border-b border-research-line last:border-b-0">
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className="flex w-full items-start gap-4 px-1 py-5 text-left transition hover:bg-research-bg/60"
+      >
+        <div className="min-w-0 flex-1">
+          <div className="mb-2 flex flex-wrap items-center gap-2">
             {narrative.tickers.map((t) => (
               <span
                 key={t}
-                className="rounded-md border border-terminal-cyan/20 bg-terminal-cyan/10 px-2 py-0.5 font-mono text-xs font-semibold text-terminal-cyan"
+                className="font-mono text-xs font-semibold tracking-wide text-research-green"
               >
                 ${t}
               </span>
             ))}
           </div>
+          <h3 className="text-lg font-semibold tracking-tight text-research-ink">{narrative.title}</h3>
+          {!open && (
+            <p className="mt-1.5 line-clamp-2 text-sm leading-relaxed text-research-muted">
+              {narrative.story}
+            </p>
+          )}
         </div>
-        <DegenScore score={narrative.degen_score} />
-      </div>
-
-      <p className="mb-3 max-w-5xl text-[15px] leading-7 text-slate-200">{narrative.story}</p>
-      <p className="mb-5 text-sm leading-6 text-terminal-muted">
-        <span className="font-mono text-xs font-semibold text-terminal-yellow">WHY NOW:</span>{' '}
-        {narrative.why_now}
-      </p>
-
-      <div className="mb-4 grid gap-3 md:grid-cols-2">
-        <div className="rounded-lg border border-terminal-green/25 bg-terminal-green/[0.07] p-4">
-          <p className="mb-1.5 font-mono text-xs font-semibold uppercase tracking-wide text-terminal-green">Bull</p>
-          <p className="text-sm leading-6 text-slate-200">{narrative.bull_case}</p>
+        <div className="flex shrink-0 flex-col items-end gap-2 pt-1">
+          <DegenScore score={narrative.degen_score} size="sm" />
+          <span className="text-xs text-research-muted">{open ? 'Hide' : 'Read'}</span>
         </div>
-        <div className="rounded-lg border border-terminal-red/25 bg-terminal-red/[0.07] p-4">
-          <p className="mb-1.5 font-mono text-xs font-semibold uppercase tracking-wide text-terminal-red">Bear</p>
-          <p className="text-sm leading-6 text-slate-200">{narrative.bear_case}</p>
-        </div>
-      </div>
+      </button>
 
-      {narrative.catalysts.length > 0 && (
-        <div className="mb-4">
-          <p className="mb-2 font-mono text-xs font-semibold uppercase tracking-wide text-slate-300">Catalysts</p>
-          <ul className="flex flex-wrap gap-2">
-            {narrative.catalysts.map((c) => (
-              <li
-                key={c}
-                className="rounded-md border border-terminal-border bg-terminal-bg/60 px-2 py-1 text-xs text-slate-300"
-              >
-                {c}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
+      {open && (
+        <div className="animate-fade-up space-y-5 px-1 pb-6">
+          <p className="max-w-2xl text-[15px] leading-7 text-research-ink">{narrative.story}</p>
 
-      {narrative.options_plays.length > 0 && (
-        <div className="mb-4">
-          <button
-            onClick={() => setExpanded(!expanded)}
-            className="mb-2 text-xs font-semibold uppercase tracking-wide text-terminal-cyan hover:underline"
-          >
-            {expanded ? 'Hide' : 'Show'} Options Plays ({narrative.options_plays.length})
-          </button>
-          {expanded && (
-            <div className="space-y-2">
-              {narrative.options_plays.map((play, i) => (
-                <div
-                  key={i}
-                  className="rounded border border-terminal-border bg-terminal-bg p-3 text-sm"
-                >
-                  <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                    <span className="font-mono font-bold text-terminal-yellow">
-                      {play.ticker} {play.direction.toUpperCase()}
-                    </span>
+          <p className="max-w-2xl text-sm leading-6 text-research-muted">
+            <span className="font-semibold text-research-ink">Why now · </span>
+            {narrative.why_now}
+          </p>
+
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="rounded-2xl bg-research-green-soft/70 px-4 py-3">
+              <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-research-green">
+                Bull case
+              </p>
+              <p className="text-sm leading-6 text-research-ink">{narrative.bull_case}</p>
+            </div>
+            <div className="rounded-2xl bg-research-red-soft/70 px-4 py-3">
+              <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-research-red">
+                Bear case
+              </p>
+              <p className="text-sm leading-6 text-research-ink">{narrative.bear_case}</p>
+            </div>
+          </div>
+
+          {narrative.catalysts.length > 0 && (
+            <div>
+              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-research-muted">
+                Catalysts
+              </p>
+              <ul className="flex flex-wrap gap-2">
+                {narrative.catalysts.map((c) => (
+                  <li
+                    key={c}
+                    className="rounded-full bg-research-bg px-3 py-1 text-xs font-medium text-research-ink"
+                  >
+                    {c}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {narrative.options_plays.length > 0 && (
+            <div>
+              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-research-muted">
+                Setups to research
+              </p>
+              <div className="space-y-2">
+                {narrative.options_plays.map((play, i) => (
+                  <div
+                    key={i}
+                    className="flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-research-bg px-4 py-3"
+                  >
+                    <div>
+                      <p className="font-mono text-sm font-semibold">
+                        {play.ticker}{' '}
+                        <span className="capitalize text-research-muted">{play.direction}</span>
+                      </p>
+                      <p className="mt-0.5 text-sm text-research-muted">
+                        {play.strike_zone} · {play.expiry}
+                      </p>
+                      {play.iv_note && (
+                        <p className="mt-1 text-xs text-research-muted">IV · {play.iv_note}</p>
+                      )}
+                      {play.risk_note && (
+                        <p className="mt-1 text-xs text-research-red">Risk · {play.risk_note}</p>
+                      )}
+                    </div>
                     <DegenScore score={play.degen_score} size="sm" />
                   </div>
-                  <p className="text-gray-300">
-                    {play.strike_zone} · exp {play.expiry}
-                  </p>
-                  {play.iv_note && (
-                    <p className="mt-1 text-xs text-terminal-muted">IV: {play.iv_note}</p>
-                  )}
-                  {play.risk_note && (
-                    <p className="mt-1 text-xs text-terminal-red">Risk: {play.risk_note}</p>
-                  )}
-                </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {narrative.sources.length > 0 && (
+            <div className="flex flex-wrap gap-x-4 gap-y-1">
+              {narrative.sources.map((s, i) => (
+                <a
+                  key={i}
+                  href={s.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs font-medium text-research-blue hover:underline"
+                >
+                  {s.title.slice(0, 48)}
+                  {s.title.length > 48 ? '…' : ''}
+                </a>
               ))}
             </div>
           )}
-        </div>
-      )}
-
-      {narrative.sources.length > 0 && (
-        <div className="border-t border-terminal-border pt-4">
-          <p className="mb-2 font-mono text-xs font-semibold uppercase tracking-wide text-slate-300">Sources</p>
-          <div className="flex flex-wrap gap-2">
-            {narrative.sources.map((s, i) => (
-              <a
-                key={i}
-                href={s.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-xs text-terminal-cyan hover:underline"
-              >
-                [{s.source_type}] {s.title.slice(0, 60)}
-              </a>
-            ))}
-          </div>
         </div>
       )}
     </article>

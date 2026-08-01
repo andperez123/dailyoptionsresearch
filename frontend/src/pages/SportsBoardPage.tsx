@@ -1,9 +1,100 @@
 import { useEffect, useMemo, useState } from 'react'
 import { getSports } from '../api'
-import type { SportsBoardResponse } from '../types'
+import type { SportsBoardResponse, SportsGameCard } from '../types'
 import { formatTime } from '../lib/format'
 
 type SortMode = 'relevance' | 'soonest'
+
+function GameRow({ game }: { game: SportsGameCard }) {
+  const [open, setOpen] = useState(false)
+
+  return (
+    <article className="border-b border-research-line last:border-b-0">
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className="flex w-full items-start justify-between gap-4 px-1 py-5 text-left"
+      >
+        <div>
+          <p className="text-xs font-medium uppercase tracking-wide text-research-muted">
+            {game.sport_title || game.sport}
+            {game.is_live_window ? ' · live window' : ''}
+          </p>
+          <h3 className="mt-1 text-[15px] font-semibold text-research-ink">
+            {game.away_team} @ {game.home_team}
+          </h3>
+          <p className="mt-0.5 text-sm text-research-muted">
+            {new Date(game.commence_time).toLocaleString()}
+          </p>
+          {game.line_movement && (
+            <p className="mt-2 text-xs font-medium text-research-blue">Line moved</p>
+          )}
+        </div>
+        <div className="text-right">
+          <p className="font-mono text-sm font-semibold tabular-nums text-research-ink">
+            {game.relevance_score.toFixed(1)}
+          </p>
+          <p className="mt-0.5 text-xs text-research-muted">{open ? 'Hide' : 'Details'}</p>
+        </div>
+      </button>
+
+      {open && (
+        <div className="animate-fade-up space-y-4 px-1 pb-5">
+          <div className="space-y-2">
+            {game.lines.slice(0, 4).map((line) => (
+              <div
+                key={`${line.bookmaker}-${line.market}`}
+                className="rounded-2xl bg-research-bg px-4 py-3 text-sm"
+              >
+                <p className="text-xs text-research-muted">
+                  {line.bookmaker} · {line.market}
+                </p>
+                <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1">
+                  {line.outcomes.map((o) => (
+                    <span key={`${o.name}-${o.price}`} className="font-mono text-sm tabular-nums">
+                      {o.name}{' '}
+                      <span className="font-semibold">
+                        {o.price > 0 ? '+' : ''}
+                        {o.price}
+                      </span>
+                      {o.point != null ? ` (${o.point})` : ''}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {game.movement_delta && (
+            <p className="text-sm text-research-muted">{game.movement_delta}</p>
+          )}
+
+          {game.news_context.length > 0 && (
+            <div className="space-y-1.5">
+              {game.news_context.slice(0, 3).map((article) => (
+                <a
+                  key={article.url}
+                  href={article.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="block text-sm font-medium text-research-blue hover:underline"
+                >
+                  {article.title}
+                </a>
+              ))}
+            </div>
+          )}
+
+          {game.ai_context && (
+            <p className="rounded-2xl bg-research-amber-soft/70 px-4 py-3 text-sm leading-6 text-research-ink">
+              {game.ai_context}
+            </p>
+          )}
+        </div>
+      )}
+    </article>
+  )
+}
 
 export function SportsBoardPage() {
   const [board, setBoard] = useState<SportsBoardResponse | null>(null)
@@ -52,14 +143,14 @@ export function SportsBoardPage() {
   if (loading) {
     return (
       <div className="flex min-h-[40vh] items-center justify-center">
-        <p className="animate-pulse font-mono text-terminal-green">Loading sports board...</p>
+        <p className="animate-pulse text-sm text-research-muted">Loading sports…</p>
       </div>
     )
   }
 
   if (error) {
     return (
-      <div className="rounded border border-terminal-red/40 p-4 text-sm text-terminal-red">
+      <div className="rounded-2xl bg-research-red-soft px-4 py-3 text-sm text-research-red">
         {error}
       </div>
     )
@@ -67,31 +158,30 @@ export function SportsBoardPage() {
 
   if (!board?.configured) {
     return (
-      <div className="rounded border border-dashed border-terminal-border p-12 text-center">
-        <h1 className="mb-2 text-lg font-bold">Sports Board</h1>
-        <p className="text-sm text-terminal-muted">{board?.message || 'Odds API not configured'}</p>
-        <p className="mt-4 text-xs text-gray-500">
-          Add <code className="text-terminal-cyan">ODDS_API_KEY</code> to .env — free tier at the-odds-api.com
+      <div className="rounded-2xl bg-research-bg px-6 py-16 text-center">
+        <h1 className="text-2xl font-semibold tracking-tight">Sports</h1>
+        <p className="mx-auto mt-3 max-w-md text-sm text-research-muted">
+          {board?.message || 'Odds API not configured'}
         </p>
       </div>
     )
   }
 
   return (
-    <div>
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+    <div className="animate-fade-up">
+      <div className="mb-8 flex flex-wrap items-end justify-between gap-4">
         <div>
-          <h1 className="text-lg font-bold">Sports Board</h1>
-          <p className="text-[10px] text-terminal-muted">
-            Observations only — not picks · Updated {formatTime(board.data_timestamp)}
-            {board.quota_remaining != null ? ` · Quota ${board.quota_remaining} left` : ''}
+          <h1 className="text-3xl font-semibold tracking-tight">Sports</h1>
+          <p className="mt-1 text-sm text-research-muted">
+            Observations only · Updated {formatTime(board.data_timestamp)}
+            {board.quota_remaining != null ? ` · ${board.quota_remaining} left` : ''}
           </p>
         </div>
-        <div className="flex flex-wrap gap-2 text-xs">
+        <div className="flex flex-wrap gap-2">
           <select
             value={sportFilter}
             onChange={(e) => setSportFilter(e.target.value)}
-            className="rounded border border-terminal-border bg-terminal-bg px-2 py-1"
+            className="rounded-full border border-research-line bg-research-surface px-3 py-1.5 text-xs font-medium"
           >
             <option value="all">All competitions</option>
             {sportOptions.map((sport) => (
@@ -103,117 +193,40 @@ export function SportsBoardPage() {
           <select
             value={sortBy}
             onChange={(e) => setSortBy(e.target.value as SortMode)}
-            className="rounded border border-terminal-border bg-terminal-bg px-2 py-1"
+            className="rounded-full border border-research-line bg-research-surface px-3 py-1.5 text-xs font-medium"
           >
-            <option value="relevance">Sort: relevance</option>
-            <option value="soonest">Sort: kickoff</option>
+            <option value="relevance">Relevance</option>
+            <option value="soonest">Kickoff</option>
           </select>
         </div>
       </div>
 
       {board.featured_competitions.length > 0 && (
-        <div className="mb-4 flex flex-wrap gap-2">
+        <div className="mb-5 flex flex-wrap gap-2">
           {board.featured_competitions.map((comp) => (
             <span
               key={comp}
-              className="rounded border border-terminal-yellow/30 px-2 py-1 text-[10px] uppercase text-terminal-yellow"
+              className="rounded-full bg-research-amber-soft px-3 py-1 text-xs font-medium text-research-amber"
             >
-              Featured: {comp}
+              {comp}
             </span>
           ))}
         </div>
       )}
 
-      <div className="grid gap-3 md:grid-cols-2">
-        {visibleGames.map((game) => (
-          <article
-            key={game.event_key || `${game.commence_time}-${game.away_team}-${game.home_team}`}
-            className="rounded border border-terminal-border bg-terminal-panel p-4 text-sm"
-          >
-            <div className="mb-2 flex items-start justify-between gap-2">
-              <div>
-                <span className="text-[10px] uppercase text-terminal-yellow">
-                  {game.sport_title || game.sport}
-                </span>
-                <h3 className="font-bold text-white">
-                  {game.away_team} @ {game.home_team}
-                </h3>
-                <p className="text-[10px] text-terminal-muted">
-                  {new Date(game.commence_time).toLocaleString()}
-                  {game.is_live_window ? ' · live window' : ''}
-                </p>
-              </div>
-              <div className="text-right text-[10px]">
-                <p className="font-mono text-terminal-cyan">score {game.relevance_score.toFixed(1)}</p>
-                {game.line_movement && (
-                  <span className="rounded border border-terminal-cyan/40 px-2 py-0.5 text-terminal-cyan">
-                    moved
-                  </span>
-                )}
-              </div>
-            </div>
-
-            {game.relevance_factors && (
-              <p className="mb-2 text-[10px] text-gray-500">
-                Relevance: proximity {game.relevance_factors.proximity ?? 0} · stage{' '}
-                {game.relevance_factors.stage ?? 0} · news {game.relevance_factors.news_hits ?? 0}
-              </p>
-            )}
-
-            <div className="mb-3 space-y-2">
-              {game.lines.slice(0, 4).map((line) => (
-                <div
-                  key={`${line.bookmaker}-${line.market}`}
-                  className="rounded bg-terminal-bg p-2 text-xs"
-                >
-                  <span className="text-terminal-muted">
-                    {line.bookmaker} · {line.market}
-                  </span>
-                  <div className="mt-1 flex flex-wrap gap-2">
-                    {line.outcomes.map((o) => (
-                      <span key={`${o.name}-${o.price}`} className="font-mono text-gray-300">
-                        {o.name}: {o.price > 0 ? '+' : ''}
-                        {o.price}
-                        {o.point != null ? ` (${o.point})` : ''}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            {game.movement_delta && (
-              <p className="mb-2 text-[10px] text-terminal-cyan">{game.movement_delta}</p>
-            )}
-
-            {game.news_context.length > 0 && (
-              <div className="mb-2 space-y-1 border-t border-terminal-border pt-2">
-                <p className="text-[10px] uppercase text-terminal-muted">Matched news</p>
-                {game.news_context.slice(0, 3).map((article) => (
-                  <a
-                    key={article.url}
-                    href={article.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="block text-xs text-terminal-cyan hover:underline"
-                  >
-                    {article.title}
-                  </a>
-                ))}
-              </div>
-            )}
-
-            {game.ai_context && (
-              <p className="rounded border border-terminal-yellow/20 bg-terminal-bg p-2 text-xs text-gray-400">
-                <span className="text-terminal-yellow">Context:</span> {game.ai_context}
-              </p>
-            )}
-          </article>
-        ))}
-      </div>
-
-      {visibleGames.length === 0 && (
-        <p className="text-center text-sm text-terminal-muted">No games loaded. Worker will refresh on schedule.</p>
+      {visibleGames.length === 0 ? (
+        <div className="rounded-2xl bg-research-bg px-6 py-14 text-center text-sm text-research-muted">
+          No games loaded yet.
+        </div>
+      ) : (
+        <div className="rounded-2xl bg-research-surface px-4 shadow-soft sm:px-5">
+          {visibleGames.map((game) => (
+            <GameRow
+              key={game.event_key || `${game.commence_time}-${game.away_team}-${game.home_team}`}
+              game={game}
+            />
+          ))}
+        </div>
       )}
     </div>
   )
