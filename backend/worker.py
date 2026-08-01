@@ -26,11 +26,6 @@ from time_utils import utc_now_iso
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("worker")
 
-_shutdown_event = asyncio.Event()
-
-
-def _request_shutdown() -> None:
-    _shutdown_event.set()
 
 
 async def job_news_scan() -> None:
@@ -137,6 +132,11 @@ def create_scheduler() -> AsyncIOScheduler:
 
 
 async def main() -> None:
+    shutdown_event = asyncio.Event()
+
+    def request_shutdown() -> None:
+        shutdown_event.set()
+
     await init_db()
     scheduler = create_scheduler()
     scheduler.start()
@@ -149,14 +149,14 @@ async def main() -> None:
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:
-            loop.add_signal_handler(sig, _request_shutdown)
+            loop.add_signal_handler(sig, request_shutdown)
         except NotImplementedError:
-            signal.signal(sig, lambda *_: _request_shutdown())
+            signal.signal(sig, lambda *_: request_shutdown())
 
     await job_news_scan()
     await job_market_snapshots()
 
-    await _shutdown_event.wait()
+    await shutdown_event.wait()
     scheduler.shutdown(wait=True)
     logger.info("Worker stopped")
 

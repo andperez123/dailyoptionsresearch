@@ -3,5 +3,5 @@ builder = "dockerfile"
 dockerfilePath = "Dockerfile"
 
 [deploy]
-startCommand = "sh scripts/railway-worker.sh"
+startCommand = "sh -c 'cd backend && python worker.py'"
 restartPolicyType = "on_failure"
