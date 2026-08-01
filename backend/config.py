@@ -35,6 +35,9 @@ class Settings(BaseSettings):
     catalyst_model_version: str = "catalyst-v1"
     catalyst_scoring_version: str = "score-v1"
     news_max_age_hours: int = 48
+    briefing_news_max_age_hours: int = 24
+    min_independent_sources: int = 2
+    require_multi_source_narratives: bool = True
     odds_dynamic_discovery: bool = True
     odds_regions: str = "us"
     odds_max_sports_per_scan: int = 8

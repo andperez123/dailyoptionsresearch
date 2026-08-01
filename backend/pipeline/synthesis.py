@@ -13,6 +13,7 @@ from pipeline.news import NewsItem
 from pipeline.odds import SportsEvent
 from pipeline.options import OptionsSnapshot
 from pipeline.reddit import RedditPost
+from pipeline.research import build_ticker_dossiers, validate_narratives
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +63,7 @@ def _serialize_news(news: list[NewsItem], limit: int = 30) -> list[dict]:
             "ticker": n.ticker,
             "published": n.published,
             "source_tier": getattr(n, "source_tier", "rss"),
+            "summary": (getattr(n, "summary", "") or "")[:400],
         }
         for n in news[:limit]
     ]
@@ -75,7 +77,11 @@ def _serialize_options(options: list[OptionsSnapshot]) -> list[dict]:
                 "ticker": snap.ticker,
                 "price": snap.current_price,
                 "nearest_expiry": snap.nearest_expiry,
+                "next_expiry": getattr(snap, "next_expiry", None),
                 "avg_iv": snap.avg_iv,
+                "atm_iv": getattr(snap, "atm_iv", None),
+                "call_put_iv_skew": getattr(snap, "call_put_iv_skew", None),
+                "iv_regime": getattr(snap, "iv_regime", None),
                 "put_call_volume_ratio": snap.put_call_volume_ratio,
                 "notable_calls": [
                     {
@@ -135,8 +141,21 @@ def build_stock_research_packet(
     buzz_deltas: dict[str, float],
     overnight_catalysts: list[dict] | None,
     macro_context: list[dict[str, Any]] | None = None,
+    ticker_dossiers: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     return {
+        "research_contract": {
+            "max_source_age_hours": settings.briefing_news_max_age_hours,
+            "min_independent_sources": settings.min_independent_sources,
+            "require_multi_source_narratives": settings.require_multi_source_narratives,
+            "rules": [
+                "Only write full narratives for tickers with multi-source dossiers (meets_multi_source_bar=true).",
+                "Insight must synthesize across sources — never rewrite a single headline.",
+                "Prefer strategy_candidates from dossiers over naked long calls/puts.",
+                "Use only recent packet data for 'why now'; flag stale claims.",
+            ],
+        },
+        "ticker_dossiers": ticker_dossiers or [],
         "overnight_catalysts": overnight_catalysts or [],
         "ticker_mentions": dict(list(ticker_counts.items())[:20]),
         "buzz_deltas": dict(list(buzz_deltas.items())[:20]),
@@ -159,16 +178,23 @@ def build_sports_research_packet(
     }
 
 
-SYSTEM_PROMPT = """You are a narrative market and sports research editor.
+SYSTEM_PROMPT = """You are a multi-source market and sports research editor.
 Write source-grounded daily briefings for a research terminal — not trade picks.
 
-Rules:
+Hard rules:
 - Output ONLY valid JSON matching the schema exactly.
-- Every narrative must cite real URLs from the provided packets or web search results.
+- Stock narratives MUST be grounded in ticker_dossiers with meets_multi_source_bar=true.
+- Every narrative needs ≥2 independent sources (different domains/providers). Cite real URLs.
+- The "insight" field must be a non-obvious synthesis across sources + market/options data —
+  NEVER a paraphrase of a single headline.
+- Separate observations (what sources say) from inference (your synthesis).
+- Prefer dossier strategy_candidates. Do NOT default to naked long calls/puts.
+  Use multi-leg structures: debit/credit spreads, calendars, diagonals, iron condors,
+  strangles, jade lizards, risk reversals — chosen for the IV regime and catalyst.
+- Explain edge: why that structure makes money vs a simple call/put.
 - Do NOT invent matchups, odds, injuries, or public-vs-sharp claims.
 - Sports angles must reference a matchup present in RANKED ODDS EVENTS.
-- Stock narratives must connect to catalysts, news, or options data in the packet.
-- Prefer the dominant story: why it matters now, what is priced in, what confirms or invalidates it.
+- why_now must use today's fresh packet data (age within research_contract max hours).
 - Degen score 1 = conservative, 5 = speculative. Include risk framing.
 - This is entertainment/research, not financial advice.
 """
@@ -179,8 +205,10 @@ def build_user_prompt(
     sports_packet: dict[str, Any],
 ) -> str:
     return f"""Create today's narrative research briefing from these deterministic packets.
-Use web search only to enrich current reporting for the events and tickers already in the packets.
-Prioritize live and upcoming competitions with the highest relevance_score.
+Use web search only to corroborate or enrich tickers/events already in the packets —
+never to invent a brand-new thesis with no packet support.
+Prioritize ticker_dossiers where meets_multi_source_bar=true and corroborated_claims exist.
+Prioritize live/upcoming sports with the highest relevance_score.
 
 STOCK RESEARCH PACKET:
 {json.dumps(stock_packet, indent=2)}
@@ -190,24 +218,38 @@ SPORTS RESEARCH PACKET:
 
 Return JSON with this exact structure:
 {{
-  "summary": "2-3 sentence overview of today's dominant stories",
+  "summary": "2-3 sentence overview of today's dominant multi-source stories",
   "narratives": [
     {{
       "title": "string",
       "tickers": ["TICK"],
-      "story": "dominant narrative",
-      "why_now": "why it matters today",
+      "story": "what independent sources agree/disagree on",
+      "why_now": "why it matters today using fresh packet evidence",
+      "insight": "non-obvious cross-source synthesis (not a headline rewrite)",
+      "priced_in": "what options/price action already reflects",
       "bull_case": "string",
       "bear_case": "string",
       "catalysts": ["date or event"],
+      "confirmation_points": ["what would strengthen the thesis"],
+      "invalidation_points": ["what would break the thesis"],
       "degen_score": 1-5,
       "options_plays": [
         {{
           "ticker": "TICK",
-          "direction": "call/put/spread",
-          "strike_zone": "e.g. $150-155 calls",
-          "expiry": "YYYY-MM-DD or weekly",
-          "iv_note": "cheap/expensive IV note",
+          "direction": "bullish|bearish|neutral|volatility",
+          "strategy_type": "debit_call_spread|credit_put_spread|iron_condor|long_strangle|calendar_call|diagonal_call|jade_lizard|risk_reversal|...",
+          "structure": "human-readable legs summary",
+          "strike_zone": "e.g. $150/$155 call debit spread",
+          "expiry": "YYYY-MM-DD or near→far",
+          "legs": [{{"action":"buy|sell","option_type":"call|put","strike":"150","expiry":"YYYY-MM-DD","quantity":1}}],
+          "thesis": "why this trade",
+          "edge": "why this structure makes money vs naked call/put",
+          "iv_note": "IV regime note",
+          "max_loss": "string",
+          "max_gain": "string",
+          "breakeven": "string",
+          "when_it_wins": "string",
+          "when_it_loses": "string",
           "degen_score": 1-5,
           "risk_note": "what can go wrong"
         }}
@@ -236,12 +278,13 @@ Return JSON with this exact structure:
       "ticker": "TICK",
       "buzz_delta": 0.0,
       "mention_count": 0,
-      "note": "why it's on radar but not a full narrative yet"
+      "note": "on radar — missing multi-source corroboration or still forming"
     }}
   ]
 }}
 
-Produce 3-6 narratives, 2-4 sports angles, and 3-8 radar items."""
+Produce 2-5 multi-source narratives (quality over quantity), 2-4 sports angles, and 3-8 radar items.
+Single-source buzz belongs on radar, not as a full narrative."""
 
 
 def _normalize_matchup(value: str) -> str:
@@ -457,6 +500,19 @@ async def synthesize_briefing(
     if not settings.openai_api_key:
         raise ValueError("OPENAI_API_KEY is not configured")
 
+    top_tickers = select_top_tickers(ticker_counts)
+    dossiers = build_ticker_dossiers(
+        tickers=top_tickers,
+        news=news,
+        finance_posts=finance_posts,
+        options=options,
+        overnight_catalysts=overnight_catalysts or [],
+        ticker_counts=ticker_counts,
+        buzz_deltas=buzz_deltas,
+        macro_context=macro_context,
+        max_age_hours=settings.briefing_news_max_age_hours,
+    )
+
     stock_packet = build_stock_research_packet(
         finance_posts,
         news,
@@ -465,6 +521,7 @@ async def synthesize_briefing(
         buzz_deltas,
         overnight_catalysts,
         macro_context,
+        ticker_dossiers=dossiers,
     )
     sports_packet = build_sports_research_packet(sports_posts, odds, sports_news)
     user_prompt = build_user_prompt(stock_packet, sports_packet)
@@ -484,6 +541,54 @@ async def synthesize_briefing(
                     sources.append(citation)
             narrative["sources"] = sources
 
+    before_count = len(data.get("narratives") or [])
+    raw_narratives = data.get("narratives") or []
+    data["narratives"] = validate_narratives(
+        raw_narratives,
+        dossiers,
+        require_multi_source=settings.require_multi_source_narratives,
+    )
+    if not data["narratives"] and raw_narratives and settings.require_multi_source_narratives:
+        # Thin corroboration day — keep narratives but mark low confidence
+        data["narratives"] = validate_narratives(
+            raw_narratives, dossiers, require_multi_source=False
+        )
+        for narrative in data["narratives"]:
+            rq = narrative.setdefault("research_quality", {})
+            rq["warning"] = "Multi-source bar not met — thesis marked low confidence"
+            rq["meets_multi_source_bar"] = False
+    dropped = before_count - len(data["narratives"])
+
+    # Auto-radar for strong-buzz tickers that failed the multi-source bar
+    radar = list(data.get("radar") or [])
+    radar_tickers = {str(r.get("ticker", "")).upper() for r in radar}
+    for dossier in dossiers:
+        t = dossier["ticker"]
+        quality = dossier.get("research_quality") or {}
+        if quality.get("meets_multi_source_bar"):
+            continue
+        if t in radar_tickers:
+            continue
+        if dossier.get("mention_count", 0) < 2:
+            continue
+        radar.append(
+            {
+                "ticker": t,
+                "buzz_delta": dossier.get("buzz_delta", 0.0),
+                "mention_count": dossier.get("mention_count", 0),
+                "note": (
+                    f"Buzz without multi-source confirmation "
+                    f"({quality.get('independent_source_count', 0)} independent sources, "
+                    f"{quality.get('news_domain_count', 0)} news domains)"
+                ),
+            }
+        )
+        radar_tickers.add(t)
+    data["radar"] = radar[:10]
+
+    multi_source_ready = sum(
+        1 for d in dossiers if d.get("research_quality", {}).get("meets_multi_source_bar")
+    )
     data["raw_stats"] = {
         "ticker_counts": dict(list(ticker_counts.items())[:20]),
         "buzz_deltas": dict(list(buzz_deltas.items())[:20]),
@@ -493,6 +598,9 @@ async def synthesize_briefing(
         "sports_events": len(odds),
         "overnight_catalysts": len(overnight_catalysts or []),
         "web_citations": len(citations),
+        "ticker_dossiers": len(dossiers),
+        "multi_source_dossiers": multi_source_ready,
+        "narratives_dropped_single_source": dropped,
     }
     data["research_metadata"] = {
         "model": settings.openai_model,
@@ -501,5 +609,9 @@ async def synthesize_briefing(
         "stock_packet_size": len(json.dumps(stock_packet)),
         "sports_packet_size": len(json.dumps(sports_packet)),
         "validated_sports_angles": len(sports_angles),
+        "briefing_news_max_age_hours": settings.briefing_news_max_age_hours,
+        "min_independent_sources": settings.min_independent_sources,
+        "require_multi_source_narratives": settings.require_multi_source_narratives,
+        "strategy_engine": "strategies-v1",
     }
     return BriefingContent.model_validate(data)

@@ -38,6 +38,7 @@ class NewsItem:
     published: str = ""
     ticker: str | None = None
     source_tier: str = "rss"
+    summary: str = ""
 
 
 def _is_fresh(published: str) -> bool:
@@ -65,14 +66,27 @@ async def fetch_feed(url: str, ticker: str | None = None, source_tier: str = "rs
             published = entry.get("published", "")
             if not _is_fresh(published):
                 continue
+            title = entry.get("title", "") or ""
+            summary = (
+                entry.get("summary")
+                or entry.get("description")
+                or ""
+            )
+            if isinstance(summary, str):
+                summary = re.sub(r"<[^>]+>", "", summary).strip()[:800]
+            else:
+                summary = ""
+            if summary == title:
+                summary = ""
             items.append(
                 NewsItem(
-                    title=entry.get("title", ""),
+                    title=title,
                     url=entry.get("link", ""),
                     source=entry.get("source", {}).get("title", parsed.feed.get("title", "News")),
                     published=published,
                     ticker=ticker,
                     source_tier=source_tier,
+                    summary=summary,
                 )
             )
         return items
@@ -130,14 +144,23 @@ async def collect_finance_news_for_watchlist(watchlist: list[str]) -> list[NewsI
                 if headline.url in seen:
                     continue
                 seen.add(headline.url)
+                summary = (headline.summary or "").strip()
                 items.append(
                     NewsItem(
                         title=headline.headline,
                         url=headline.url,
-                        source="Finnhub",
+                        source=headline.raw_payload.get("source", "Finnhub")
+                        if isinstance(headline.raw_payload, dict)
+                        else "Finnhub",
                         published=headline.published_at.isoformat(),
                         ticker=ticker,
                         source_tier="finnhub",
+                        summary=summary if summary and summary != headline.headline else "",
                     )
                 )
+    # Prefer fresher items first for briefing consumers
+    def sort_key(item: NewsItem) -> str:
+        return item.published or ""
+
+    items.sort(key=sort_key, reverse=True)
     return items

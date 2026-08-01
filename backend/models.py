@@ -12,12 +12,30 @@ class SourceLink(BaseModel):
     source_type: str = "reddit"
 
 
+class OptionLeg(BaseModel):
+    action: str = "buy"
+    option_type: str = "call"
+    strike: str = ""
+    expiry: str = ""
+    quantity: int = 1
+
+
 class OptionsPlay(BaseModel):
     ticker: str
-    direction: str
-    strike_zone: str
-    expiry: str
+    direction: str = "bullish"
+    strategy_type: str = ""
+    structure: str = ""
+    strike_zone: str = ""
+    expiry: str = ""
+    legs: list[OptionLeg] = Field(default_factory=list)
+    thesis: str = ""
+    edge: str = ""
     iv_note: str = ""
+    max_loss: str = ""
+    max_gain: str = ""
+    breakeven: str = ""
+    when_it_wins: str = ""
+    when_it_loses: str = ""
     degen_score: int = Field(ge=1, le=5)
     risk_note: str = ""
 
@@ -29,10 +47,15 @@ class Narrative(BaseModel):
     why_now: str
     bull_case: str
     bear_case: str
+    insight: str = ""
+    priced_in: str = ""
     catalysts: list[str] = Field(default_factory=list)
+    confirmation_points: list[str] = Field(default_factory=list)
+    invalidation_points: list[str] = Field(default_factory=list)
     degen_score: int = Field(ge=1, le=5)
     options_plays: list[OptionsPlay] = Field(default_factory=list)
     sources: list[SourceLink] = Field(default_factory=list)
+    research_quality: dict[str, Any] = Field(default_factory=dict)
 
 
 class SportsAngle(BaseModel):

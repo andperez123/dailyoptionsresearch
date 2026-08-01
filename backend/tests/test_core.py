@@ -231,6 +231,133 @@ def test_parse_model_json_rejects_empty() -> None:
         _parse_model_json("   ")
 
 
+def test_propose_strategies_prefers_spreads_when_iv_elevated() -> None:
+    from pipeline.strategies import propose_strategies
+
+    proposals = propose_strategies(
+        ticker="NVDA",
+        price=140.0,
+        nearest_expiry="2026-08-08",
+        next_expiry="2026-08-15",
+        avg_iv=0.65,
+        put_call_ratio=0.6,
+        catalyst_direction="bullish",
+        limit=3,
+    )
+    assert proposals
+    types = {p.strategy_type for p in proposals}
+    assert "debit_call_spread" in types or "credit_put_spread" in types
+    assert all(p.strategy_type not in {"long_call", "long_put"} for p in proposals)
+    assert all(len(p.legs) >= 2 for p in proposals)
+
+
+def test_propose_strategies_event_bias_includes_strangle() -> None:
+    from pipeline.strategies import propose_strategies
+
+    proposals = propose_strategies(
+        ticker="AAPL",
+        price=200.0,
+        nearest_expiry="2026-08-08",
+        next_expiry="2026-09-19",
+        avg_iv=0.4,
+        catalyst_direction="volatility",
+        catalyst_type="earnings",
+        limit=4,
+    )
+    types = {p.strategy_type for p in proposals}
+    assert "long_strangle" in types or "calendar_call" in types
+
+
+def test_build_ticker_dossiers_corroborates_multi_domain_news() -> None:
+    from pipeline.news import NewsItem
+    from pipeline.options import OptionsSnapshot
+    from pipeline.research import build_ticker_dossiers
+
+    news = [
+        NewsItem(
+            title="Acme wins major cloud contract deal",
+            url="https://www.reuters.com/acme-1",
+            source="Reuters",
+            published=utc_now().isoformat(),
+            ticker="ACME",
+            source_tier="finnhub",
+            summary="Acme secured a multi-year cloud deal.",
+        ),
+        NewsItem(
+            title="Acme wins major cloud contract award",
+            url="https://www.cnbc.com/acme-2",
+            source="CNBC",
+            published=utc_now().isoformat(),
+            ticker="ACME",
+            source_tier="rss",
+            summary="Analysts lift targets after contract win.",
+        ),
+    ]
+    dossiers = build_ticker_dossiers(
+        tickers=["ACME"],
+        news=news,
+        finance_posts=[],
+        options=[OptionsSnapshot(ticker="ACME", current_price=50.0, nearest_expiry=None, error="No chain")],
+        overnight_catalysts=[],
+        ticker_counts={"ACME": 5},
+        buzz_deltas={"ACME": 1.2},
+        max_age_hours=24,
+    )
+    assert len(dossiers) == 1
+    quality = dossiers[0]["research_quality"]
+    assert quality["news_domain_count"] >= 2
+    assert quality["meets_multi_source_bar"] is True
+    assert quality["independent_source_count"] >= 2
+
+
+def test_validate_narratives_drops_single_source_when_required() -> None:
+    from pipeline.research import validate_narratives
+
+    dossiers = [
+        {
+            "ticker": "ACME",
+            "research_quality": {
+                "independent_source_count": 1,
+                "distinct_domains": ["reddit.com"],
+                "source_types": ["reddit"],
+                "corroborated_claim_count": 0,
+                "meets_multi_source_bar": False,
+                "news_domain_count": 0,
+            },
+            "sources": [],
+            "strategy_candidates": [
+                {
+                    "ticker": "ACME",
+                    "direction": "bullish",
+                    "strategy_type": "debit_call_spread",
+                    "structure": "Buy 50C / Sell 55C",
+                    "strike_zone": "$50/$55",
+                    "expiry": "2026-08-08",
+                    "legs": [],
+                    "degen_score": 2,
+                    "risk_note": "",
+                    "iv_note": "",
+                    "edge": "defined risk",
+                }
+            ],
+        }
+    ]
+    kept = validate_narratives(
+        [{"title": "Weak", "tickers": ["ACME"], "sources": [], "options_plays": [{"direction": "call", "ticker": "ACME", "strike_zone": "calls", "expiry": "weekly", "degen_score": 4}]}],
+        dossiers,
+        require_multi_source=True,
+    )
+    assert kept == []
+
+    soft = validate_narratives(
+        [{"title": "Weak", "tickers": ["ACME"], "sources": [], "options_plays": [{"direction": "call", "ticker": "ACME", "strike_zone": "calls", "expiry": "weekly", "degen_score": 4}]}],
+        dossiers,
+        require_multi_source=False,
+    )
+    assert len(soft) == 1
+    assert soft[0]["options_plays"][0]["strategy_type"] == "debit_call_spread"
+
+
 def test_score_event_relevance_increases_with_news_hits() -> None:
     event = {
         "sport_key": "soccer_epl",

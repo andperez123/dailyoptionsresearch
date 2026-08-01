@@ -5,6 +5,8 @@ from dataclasses import dataclass, field
 
 import yfinance as yf
 
+from pipeline.strategies import classify_iv_regime
+
 
 @dataclass
 class OptionContract:
@@ -23,12 +25,17 @@ class OptionsSnapshot:
     ticker: str
     current_price: float | None
     nearest_expiry: str | None
+    next_expiry: str | None = None
     notable_calls: list[OptionContract] = field(default_factory=list)
     notable_puts: list[OptionContract] = field(default_factory=list)
     avg_iv: float | None = None
+    atm_iv: float | None = None
+    call_put_iv_skew: float | None = None
+    iv_regime: str | None = None
     total_call_volume: int = 0
     total_put_volume: int = 0
     put_call_volume_ratio: float | None = None
+    expiries_considered: list[str] = field(default_factory=list)
     error: str | None = None
 
 
@@ -44,6 +51,31 @@ def _safe_float(value) -> float | None:
         return None
 
 
+def _atm_iv_from_chain(calls, puts, price: float | None) -> tuple[float | None, float | None]:
+    if price is None or price <= 0:
+        return None, None
+    call_iv = None
+    put_iv = None
+    if not calls.empty:
+        calls = calls.copy()
+        calls["dist"] = (calls["strike"] - price).abs()
+        row = calls.sort_values("dist").iloc[0]
+        call_iv = _safe_float(row.get("impliedVolatility"))
+    if not puts.empty:
+        puts = puts.copy()
+        puts["dist"] = (puts["strike"] - price).abs()
+        row = puts.sort_values("dist").iloc[0]
+        put_iv = _safe_float(row.get("impliedVolatility"))
+    atm = None
+    vals = [v for v in (call_iv, put_iv) if v is not None]
+    if vals:
+        atm = round(sum(vals) / len(vals), 4)
+    skew = None
+    if call_iv is not None and put_iv is not None:
+        skew = round(put_iv - call_iv, 4)
+    return atm, skew
+
+
 def fetch_options_snapshot(ticker: str) -> OptionsSnapshot:
     snapshot = OptionsSnapshot(ticker=ticker, current_price=None, nearest_expiry=None)
     try:
@@ -51,13 +83,17 @@ def fetch_options_snapshot(ticker: str) -> OptionsSnapshot:
         info = stock.info or {}
         snapshot.current_price = _safe_float(info.get("regularMarketPrice") or info.get("currentPrice"))
 
-        expiries = stock.options or []
+        expiries = list(stock.options or [])
         if not expiries:
             snapshot.error = "No options chain available"
             return snapshot
 
         nearest = expiries[0]
+        next_exp = expiries[1] if len(expiries) > 1 else None
         snapshot.nearest_expiry = nearest
+        snapshot.next_expiry = next_exp
+        snapshot.expiries_considered = expiries[:3]
+
         chain = stock.option_chain(nearest)
         calls = chain.calls
         puts = chain.puts
@@ -75,7 +111,12 @@ def fetch_options_snapshot(ticker: str) -> OptionsSnapshot:
         if iv_values:
             snapshot.avg_iv = round(sum(iv_values) / len(iv_values), 4)
 
-        def top_contracts(df, option_type: str) -> list[OptionContract]:
+        snapshot.atm_iv, snapshot.call_put_iv_skew = _atm_iv_from_chain(
+            calls, puts, snapshot.current_price
+        )
+        snapshot.iv_regime = classify_iv_regime(snapshot.avg_iv, snapshot.put_call_volume_ratio)
+
+        def top_contracts(df, option_type: str, expiry: str) -> list[OptionContract]:
             if df.empty:
                 return []
             df = df.copy()
@@ -86,7 +127,7 @@ def fetch_options_snapshot(ticker: str) -> OptionsSnapshot:
                 contracts.append(
                     OptionContract(
                         strike=float(row["strike"]),
-                        expiry=nearest,
+                        expiry=expiry,
                         option_type=option_type,
                         volume=int(row.get("volume") or 0),
                         open_interest=int(row.get("openInterest") or 0),
@@ -97,8 +138,8 @@ def fetch_options_snapshot(ticker: str) -> OptionsSnapshot:
                 )
             return contracts
 
-        snapshot.notable_calls = top_contracts(calls, "call")
-        snapshot.notable_puts = top_contracts(puts, "put")
+        snapshot.notable_calls = top_contracts(calls, "call", nearest)
+        snapshot.notable_puts = top_contracts(puts, "put", nearest)
     except Exception as exc:  # noqa: BLE001
         snapshot.error = str(exc)
     return snapshot

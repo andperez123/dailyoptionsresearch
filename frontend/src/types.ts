@@ -4,14 +4,42 @@ export interface SourceLink {
   source_type: string
 }
 
+export interface OptionLeg {
+  action: string
+  option_type: string
+  strike: string
+  expiry: string
+  quantity?: number
+}
+
 export interface OptionsPlay {
   ticker: string
   direction: string
+  strategy_type?: string
+  structure?: string
   strike_zone: string
   expiry: string
+  legs?: OptionLeg[]
+  thesis?: string
+  edge?: string
   iv_note: string
+  max_loss?: string
+  max_gain?: string
+  breakeven?: string
+  when_it_wins?: string
+  when_it_loses?: string
   degen_score: number
   risk_note: string
+}
+
+export interface ResearchQuality {
+  independent_source_count?: number
+  news_domain_count?: number
+  source_types?: string[]
+  corroborated_claim_count?: number
+  meets_multi_source_bar?: boolean
+  warning?: string
+  dossier_tickers?: string[]
 }
 
 export interface Narrative {
@@ -21,10 +49,15 @@ export interface Narrative {
   why_now: string
   bull_case: string
   bear_case: string
+  insight?: string
+  priced_in?: string
   catalysts: string[]
+  confirmation_points?: string[]
+  invalidation_points?: string[]
   degen_score: number
   options_plays: OptionsPlay[]
   sources: SourceLink[]
+  research_quality?: ResearchQuality
 }
 
 export interface SportsAngle {
@@ -175,6 +208,11 @@ export interface DeepDiveResponse {
   ticker: string
   price_snapshot: MarketSnapshot | null
   options_snapshot: {
+    strategy_candidates?: OptionsPlay[]
+    next_expiry?: string | null
+    atm_iv?: number | null
+    iv_regime?: string | null
+    call_put_iv_skew?: number | null
     nearest_expiry?: string | null
     avg_iv?: number | null
     put_call_volume_ratio?: number | null

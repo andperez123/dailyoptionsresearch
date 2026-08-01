@@ -1,13 +1,22 @@
 import { useState } from 'react'
-import type { Narrative } from '../types'
+import type { Narrative, OptionsPlay } from '../types'
 import { DegenScore } from './DegenScore'
 
 interface NarrativeCardProps {
   narrative: Narrative
 }
 
+function formatStrategy(play: OptionsPlay): string {
+  if (play.strategy_type) {
+    return play.strategy_type.replace(/_/g, ' ')
+  }
+  return play.direction
+}
+
 export function NarrativeCard({ narrative }: NarrativeCardProps) {
   const [open, setOpen] = useState(false)
+  const quality = narrative.research_quality
+  const multiSource = quality?.meets_multi_source_bar
 
   return (
     <article className="border-b border-research-line last:border-b-0">
@@ -26,11 +35,26 @@ export function NarrativeCard({ narrative }: NarrativeCardProps) {
                 ${t}
               </span>
             ))}
+            {quality && (
+              <span
+                className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+                  multiSource
+                    ? 'bg-research-green-soft text-research-green'
+                    : 'bg-research-bg text-research-muted'
+                }`}
+              >
+                {multiSource
+                  ? `${quality.independent_source_count ?? 0} sources`
+                  : quality.warning
+                    ? 'low confidence'
+                    : 'forming'}
+              </span>
+            )}
           </div>
           <h3 className="text-lg font-semibold tracking-tight text-research-ink">{narrative.title}</h3>
           {!open && (
             <p className="mt-1.5 line-clamp-2 text-sm leading-relaxed text-research-muted">
-              {narrative.story}
+              {narrative.insight || narrative.story}
             </p>
           )}
         </div>
@@ -44,10 +68,24 @@ export function NarrativeCard({ narrative }: NarrativeCardProps) {
         <div className="animate-fade-up space-y-5 px-1 pb-6">
           <p className="max-w-2xl text-[15px] leading-7 text-research-ink">{narrative.story}</p>
 
+          {narrative.insight && (
+            <p className="max-w-2xl text-sm leading-6 text-research-ink">
+              <span className="font-semibold">Insight · </span>
+              {narrative.insight}
+            </p>
+          )}
+
           <p className="max-w-2xl text-sm leading-6 text-research-muted">
             <span className="font-semibold text-research-ink">Why now · </span>
             {narrative.why_now}
           </p>
+
+          {narrative.priced_in && (
+            <p className="max-w-2xl text-sm leading-6 text-research-muted">
+              <span className="font-semibold text-research-ink">Priced in · </span>
+              {narrative.priced_in}
+            </p>
+          )}
 
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="rounded-2xl bg-research-green-soft/70 px-4 py-3">
@@ -63,6 +101,36 @@ export function NarrativeCard({ narrative }: NarrativeCardProps) {
               <p className="text-sm leading-6 text-research-ink">{narrative.bear_case}</p>
             </div>
           </div>
+
+          {((narrative.confirmation_points?.length ?? 0) > 0 ||
+            (narrative.invalidation_points?.length ?? 0) > 0) && (
+            <div className="grid gap-3 sm:grid-cols-2">
+              {(narrative.confirmation_points?.length ?? 0) > 0 && (
+                <div>
+                  <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-research-muted">
+                    Confirms
+                  </p>
+                  <ul className="space-y-1 text-sm text-research-ink">
+                    {narrative.confirmation_points!.map((point) => (
+                      <li key={point}>· {point}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {(narrative.invalidation_points?.length ?? 0) > 0 && (
+                <div>
+                  <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-research-muted">
+                    Invalidates
+                  </p>
+                  <ul className="space-y-1 text-sm text-research-ink">
+                    {narrative.invalidation_points!.map((point) => (
+                      <li key={point}>· {point}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
 
           {narrative.catalysts.length > 0 && (
             <div>
@@ -85,30 +153,62 @@ export function NarrativeCard({ narrative }: NarrativeCardProps) {
           {narrative.options_plays.length > 0 && (
             <div>
               <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-research-muted">
-                Setups to research
+                Strategy setups
               </p>
-              <div className="space-y-2">
+              <div className="space-y-3">
                 {narrative.options_plays.map((play, i) => (
-                  <div
-                    key={i}
-                    className="flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-research-bg px-4 py-3"
-                  >
-                    <div>
-                      <p className="font-mono text-sm font-semibold">
-                        {play.ticker}{' '}
-                        <span className="capitalize text-research-muted">{play.direction}</span>
-                      </p>
-                      <p className="mt-0.5 text-sm text-research-muted">
-                        {play.strike_zone} · {play.expiry}
-                      </p>
-                      {play.iv_note && (
-                        <p className="mt-1 text-xs text-research-muted">IV · {play.iv_note}</p>
-                      )}
-                      {play.risk_note && (
-                        <p className="mt-1 text-xs text-research-red">Risk · {play.risk_note}</p>
-                      )}
+                  <div key={i} className="rounded-2xl bg-research-bg px-4 py-3">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div className="min-w-0 flex-1">
+                        <p className="font-mono text-sm font-semibold">
+                          {play.ticker}{' '}
+                          <span className="capitalize text-research-muted">
+                            {formatStrategy(play)}
+                          </span>
+                        </p>
+                        <p className="mt-0.5 text-sm text-research-ink">
+                          {play.structure || play.strike_zone}
+                          {play.expiry ? ` · ${play.expiry}` : ''}
+                        </p>
+                        {play.edge && (
+                          <p className="mt-1.5 text-sm leading-6 text-research-ink">
+                            <span className="font-semibold">Edge · </span>
+                            {play.edge}
+                          </p>
+                        )}
+                        {play.thesis && (
+                          <p className="mt-1 text-sm leading-6 text-research-muted">{play.thesis}</p>
+                        )}
+                        <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-research-muted">
+                          {play.max_loss && <span>Max loss · {play.max_loss}</span>}
+                          {play.max_gain && <span>Max gain · {play.max_gain}</span>}
+                          {play.breakeven && <span>BE · {play.breakeven}</span>}
+                        </div>
+                        {play.when_it_wins && (
+                          <p className="mt-1 text-xs text-research-green">Wins · {play.when_it_wins}</p>
+                        )}
+                        {play.when_it_loses && (
+                          <p className="mt-0.5 text-xs text-research-red">Loses · {play.when_it_loses}</p>
+                        )}
+                        {play.iv_note && (
+                          <p className="mt-1 text-xs text-research-muted">IV · {play.iv_note}</p>
+                        )}
+                        {play.risk_note && (
+                          <p className="mt-1 text-xs text-research-red">Risk · {play.risk_note}</p>
+                        )}
+                        {(play.legs?.length ?? 0) > 0 && (
+                          <ul className="mt-2 space-y-0.5 font-mono text-[11px] text-research-muted">
+                            {play.legs!.map((leg, li) => (
+                              <li key={li}>
+                                {leg.action.toUpperCase()} {leg.quantity ?? 1}x {leg.strike}
+                                {leg.option_type?.[0]?.toUpperCase()} {leg.expiry}
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </div>
+                      <DegenScore score={play.degen_score} size="sm" />
                     </div>
-                    <DegenScore score={play.degen_score} size="sm" />
                   </div>
                 ))}
               </div>
@@ -125,7 +225,7 @@ export function NarrativeCard({ narrative }: NarrativeCardProps) {
                   rel="noopener noreferrer"
                   className="text-xs font-medium text-research-blue hover:underline"
                 >
-                  {s.title.slice(0, 48)}
+                  [{s.source_type}] {s.title.slice(0, 48)}
                   {s.title.length > 48 ? '…' : ''}
                 </a>
               ))}

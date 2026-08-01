@@ -112,12 +112,13 @@ async def ingest_headlines(watchlist: list[str] | None = None) -> list[Normalize
         related = [item.ticker] if item.ticker else extract_tickers(item.title)
         if tickers and not related:
             related = match_tickers_in_text(item.title, tickers)
+        summary = (item.summary or "").strip()
         headlines.append(
             NormalizedHeadline(
                 provider=item.source_tier if item.source_tier != "rss" else "rss",
                 external_id=item.url or item.title,
                 headline=item.title,
-                summary=item.title,
+                summary=summary if summary else item.title,
                 url=item.url,
                 published_at=parse_rss_datetime(item.published),
                 related_tickers=related[:3],
@@ -226,7 +227,7 @@ async def ai_score_headlines(
                                         "confirmation_signals": ["string"],
                                         "invalidation_signals": ["string"],
                                         "key_risks": ["string"],
-                                        "strategy_classification": "directional_calls|directional_puts|debit_spread|credit_spread|volatility_expansion|volatility_contraction|event_watchlist|no_trade",
+                                        "strategy_classification": "debit_call_spread|debit_put_spread|credit_put_spread|credit_call_spread|long_strangle|iron_condor|calendar_spread|diagonal|jade_lizard|risk_reversal|volatility_expansion|volatility_contraction|event_watchlist|no_trade",
                                         "half_life": "intraday|1-3_days|1-2_weeks|longer_term",
                                     }
                                 ]
@@ -387,9 +388,18 @@ async def build_deep_dive(ticker: str) -> DeepDiveResponse:
 
     price_snap = await collect_ticker_snapshot(ticker)
     options = await asyncio.to_thread(fetch_options_snapshot, ticker)
+    catalysts = await get_recent_catalysts_for_ticker(ticker, limit=8)
+    events = await list_calendar_events(days=14, tickers=[ticker])
+
+    from pipeline.strategies import propose_strategies, proposals_to_play_dicts
+
     options_data = {
         "nearest_expiry": options.nearest_expiry,
+        "next_expiry": getattr(options, "next_expiry", None),
         "avg_iv": options.avg_iv,
+        "atm_iv": getattr(options, "atm_iv", None),
+        "iv_regime": getattr(options, "iv_regime", None),
+        "call_put_iv_skew": getattr(options, "call_put_iv_skew", None),
         "put_call_volume_ratio": options.put_call_volume_ratio,
         "notable_calls": [
             {"strike": c.strike, "volume": c.volume, "oi": c.open_interest}
@@ -400,12 +410,26 @@ async def build_deep_dive(ticker: str) -> DeepDiveResponse:
             for c in options.notable_puts
         ],
         "error": options.error,
+        "strategy_candidates": [],
     }
     if options.error:
         warnings.append("Options data unavailable — strategy details require validation")
-
-    catalysts = await get_recent_catalysts_for_ticker(ticker, limit=8)
-    events = await list_calendar_events(days=14, tickers=[ticker])
+    else:
+        top = catalysts[0] if catalysts else None
+        proposals = propose_strategies(
+            ticker=ticker,
+            price=options.current_price or price_snap.price,
+            nearest_expiry=options.nearest_expiry,
+            next_expiry=getattr(options, "next_expiry", None),
+            avg_iv=options.avg_iv,
+            put_call_ratio=options.put_call_volume_ratio,
+            pct_change=price_snap.pct_change,
+            catalyst_direction=top.direction if top else None,
+            catalyst_type=top.catalyst_type if top else None,
+            half_life=top.half_life if top else None,
+            limit=3,
+        )
+        options_data["strategy_candidates"] = proposals_to_play_dicts(proposals)
 
     posts = await collect_reddit_posts(settings.finance_subreddits[:2], posts_per_sub=8)
     counts = count_ticker_mentions(posts)

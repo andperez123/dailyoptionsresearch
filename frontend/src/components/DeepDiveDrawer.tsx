@@ -136,6 +136,27 @@ export function DeepDiveDrawer({ ticker, onClose }: DeepDiveDrawerProps) {
                 ))}
               </section>
 
+              {(data.options_snapshot.strategy_candidates?.length ?? 0) > 0 && (
+                <section className="space-y-2">
+                  <h3 className="text-xs font-semibold uppercase tracking-wide text-research-muted">
+                    Strategy candidates
+                  </h3>
+                  {data.options_snapshot.strategy_candidates!.slice(0, 3).map((play, i) => (
+                    <div key={i} className="rounded-2xl bg-research-bg px-4 py-3">
+                      <p className="font-mono text-sm font-semibold">
+                        {(play.strategy_type || play.direction || 'setup').replace(/_/g, ' ')}
+                      </p>
+                      <p className="mt-0.5 text-sm text-research-muted">
+                        {play.structure || play.strike_zone}
+                      </p>
+                      {play.edge && (
+                        <p className="mt-1 text-xs leading-5 text-research-ink">{play.edge}</p>
+                      )}
+                    </div>
+                  ))}
+                </section>
+              )}
+
               {(data.bull_case || data.bear_case || data.ai_analysis) && (
                 <section className="space-y-3">
                   <h3 className="text-xs font-semibold uppercase tracking-wide text-research-muted">
