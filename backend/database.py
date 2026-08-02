@@ -240,6 +240,44 @@ async def init_db() -> None:
         )
         await db.execute(
             """
+            CREATE TABLE IF NOT EXISTS sports_bet_decisions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_key TEXT NOT NULL,
+                sport_key TEXT NOT NULL,
+                sport_title TEXT,
+                home_team TEXT NOT NULL,
+                away_team TEXT NOT NULL,
+                matchup TEXT,
+                commence_time TEXT NOT NULL,
+                market TEXT NOT NULL,
+                selection TEXT NOT NULL,
+                point REAL,
+                best_price REAL NOT NULL,
+                best_bookmaker TEXT,
+                consensus_probability REAL,
+                implied_probability REAL,
+                edge_pct REAL,
+                ev_pct REAL,
+                stake_units REAL,
+                decision TEXT NOT NULL,
+                confidence REAL,
+                rationale TEXT,
+                decided_at TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'open',
+                closing_price REAL,
+                clv_pct REAL,
+                home_score INTEGER,
+                away_score INTEGER,
+                settled_at TEXT,
+                UNIQUE(event_key, market, selection, decision)
+            )
+            """
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_sports_bet_decisions_status ON sports_bet_decisions(status, commence_time)"
+        )
+        await db.execute(
+            """
             CREATE TABLE IF NOT EXISTS research_jobs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 job_type TEXT NOT NULL,
@@ -808,6 +846,122 @@ async def get_sports_odds_history(event_key: str, market: str, limit: int = 20) 
             }
             for row in rows
         ]
+
+
+# --- Sports bet decision log ---
+
+_BET_DECISION_COLUMNS = [
+    "event_key",
+    "sport_key",
+    "sport_title",
+    "home_team",
+    "away_team",
+    "matchup",
+    "commence_time",
+    "market",
+    "selection",
+    "point",
+    "best_price",
+    "best_bookmaker",
+    "consensus_probability",
+    "implied_probability",
+    "edge_pct",
+    "ev_pct",
+    "stake_units",
+    "decision",
+    "confidence",
+    "rationale",
+]
+
+
+async def save_sports_bet_decision(payload: dict[str, Any]) -> None:
+    """Record a decision sighting. Only the first row per (event, market,
+    selection, decision grade) is kept — that first price is the one that
+    gets graded, and earlier LEAN rows serve as persistence evidence."""
+    values = [payload.get(col) for col in _BET_DECISION_COLUMNS]
+    placeholders = ", ".join("?" for _ in _BET_DECISION_COLUMNS)
+    columns = ", ".join(_BET_DECISION_COLUMNS)
+    async with connect_db() as db:
+        await db.execute(
+            f"""
+            INSERT INTO sports_bet_decisions ({columns}, decided_at)
+            VALUES ({placeholders}, ?)
+            ON CONFLICT(event_key, market, selection, decision) DO NOTHING
+            """,
+            (*values, utc_now_iso()),
+        )
+        await db.commit()
+
+
+async def get_prior_positive_decision(
+    event_key: str,
+    market: str,
+    selection: str,
+    min_age_minutes: int = 30,
+) -> bool:
+    """True when this outcome already showed positive EV on an earlier scan."""
+    cutoff = (utc_now() - timedelta(minutes=min_age_minutes)).isoformat()
+    async with connect_db() as db:
+        cursor = await db.execute(
+            """
+            SELECT 1 FROM sports_bet_decisions
+            WHERE event_key = ? AND market = ? AND selection = ?
+              AND ev_pct > 0 AND decided_at <= ?
+            LIMIT 1
+            """,
+            (event_key, market, selection, cutoff),
+        )
+        return await cursor.fetchone() is not None
+
+
+async def list_sports_bet_decisions(
+    *,
+    decision: Optional[str] = "bet",
+    status: Optional[str] = None,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    clauses: list[str] = []
+    params: list[Any] = []
+    if decision:
+        clauses.append("decision = ?")
+        params.append(decision)
+    if status:
+        clauses.append("status = ?")
+        params.append(status)
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    async with connect_db() as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            f"""
+            SELECT * FROM sports_bet_decisions {where}
+            ORDER BY decided_at DESC LIMIT ?
+            """,
+            [*params, limit],
+        )
+        rows = await cursor.fetchall()
+        return [dict(row) for row in rows]
+
+
+async def settle_sports_bet_decision(
+    row_id: int,
+    *,
+    status: str,
+    home_score: Optional[int] = None,
+    away_score: Optional[int] = None,
+    closing_price: Optional[float] = None,
+    clv_pct: Optional[float] = None,
+) -> None:
+    async with connect_db() as db:
+        await db.execute(
+            """
+            UPDATE sports_bet_decisions
+            SET status = ?, home_score = ?, away_score = ?,
+                closing_price = ?, clv_pct = ?, settled_at = ?
+            WHERE id = ?
+            """,
+            (status, home_score, away_score, closing_price, clv_pct, utc_now_iso(), row_id),
+        )
+        await db.commit()
 
 
 async def save_calendar_events(events: list[CalendarEvent]) -> None:

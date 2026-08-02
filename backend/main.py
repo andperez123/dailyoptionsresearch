@@ -23,6 +23,7 @@ from database import (
     init_db,
     list_briefings,
     list_calendar_events,
+    list_sports_bet_decisions,
     list_wire_catalysts,
     save_catalyst_feedback,
 )
@@ -35,6 +36,8 @@ from models import (
     DeepDiveResponse,
     PulseResponse,
     ResearchStatus,
+    SportsBetRecordEntry,
+    SportsBetRecordResponse,
     SportsBoardResponse,
     WireResponse,
 )
@@ -42,6 +45,7 @@ from pipeline.catalyst import build_deep_dive, run_catalyst_scan
 from pipeline.market_data import market_status_now
 from pipeline.run import run_pipeline
 from pipeline.sports import build_sports_board
+from pipeline.sports_grading import compute_record_stats
 from time_utils import utc_now
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
@@ -211,6 +215,16 @@ async def get_deep_dive(ticker: str):
     if cached:
         return cached
     return await build_deep_dive(ticker)
+
+
+@app.get("/api/sports/record", response_model=SportsBetRecordResponse)
+async def get_sports_record(limit: int = Query(100, ge=1, le=500)):
+    rows = await list_sports_bet_decisions(decision="bet", limit=limit)
+    entries = [
+        SportsBetRecordEntry.model_validate({k: v for k, v in row.items() if v is not None})
+        for row in rows
+    ]
+    return SportsBetRecordResponse(entries=entries, stats=compute_record_stats(entries))
 
 
 @app.get("/api/sports", response_model=SportsBoardResponse)

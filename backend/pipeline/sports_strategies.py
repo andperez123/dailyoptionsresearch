@@ -6,18 +6,26 @@ within the configured horizon (default 3 days) it:
 
 1. Builds a cross-book consensus fair probability per outcome (vig removed
    per book, averaged across books) for h2h, spreads, and totals markets.
+   The consensus is leave-one-out: the book offering the best price is
+   excluded from its own benchmark so an outlier can't dilute the fair value
+   it is being judged against.
 2. Finds the best available price per outcome and computes the probability
    edge and expected value of betting it at that price.
-3. Reads line movement (opening snapshot vs current) and matched-news volume
-   as confirmation signals.
+3. Reads line movement (true opening snapshot vs current) and matched-news
+   volume as confirmation signals.
 4. Emits a decision — "bet", "lean", or "pass" — with a confidence score,
    a fractional-Kelly stake in units, an explicit rationale, and a
    sport-aware research checklist to run before firing.
+
+A persistence policy (apply_persistence_policy) optionally demotes
+first-sighting bets to leans until the edge has survived at least one
+prior scan, which filters transient stale-quote artifacts.
 """
 
 from __future__ import annotations
 
-from collections import defaultdict
+import hashlib
+from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -34,6 +42,14 @@ MARKET_LABELS = {
     "spreads": "spread",
     "totals": "total",
 }
+
+POINT_CLUSTER_TOLERANCE = 0.5
+
+
+def event_key_for(sport: str, home: str, away: str, commence: str) -> str:
+    """Canonical event key shared by odds snapshots and bet decisions."""
+    raw = f"{sport}|{home}|{away}|{commence}"
+    return hashlib.md5(raw.encode()).hexdigest()
 
 
 @dataclass
@@ -58,6 +74,7 @@ class BetCandidate:
     edge_pct: float
     ev_pct: float
     book_count: int
+    mixed_points: bool = False
 
 
 @dataclass
@@ -108,9 +125,14 @@ def within_bet_horizon(
     now: datetime,
     *,
     horizon_days: int,
-    allow_live_hours: float = 3.0,
+    allow_live_hours: float = 0.0,
 ) -> bool:
-    """True when the game is upcoming (or just started) and inside the horizon."""
+    """True when the game is inside the horizon.
+
+    By default the game must be strictly in the future — a pregame line on a
+    game already underway is not a biddable decision. Display surfaces can
+    pass allow_live_hours to keep in-progress games visible.
+    """
     hours = hours_until(commence_time, now)
     if hours is None:
         return False
@@ -134,7 +156,8 @@ def collect_outcome_quotes(
     """Per-outcome quotes with per-book vig-removed fair probabilities.
 
     Outcome identity includes the point so spreads/totals only compare
-    quotes at the same number.
+    quotes at the same number (clustering of near-identical points happens
+    in _cluster_point_quotes).
     """
     quotes: dict[tuple[str, Optional[float]], list[OutcomeQuote]] = defaultdict(list)
     for line in line_dicts:
@@ -160,29 +183,71 @@ def collect_outcome_quotes(
     return quotes
 
 
+def _cluster_point_quotes(
+    quotes: dict[tuple[str, Optional[float]], list[OutcomeQuote]],
+) -> dict[tuple[str, Optional[float]], list[OutcomeQuote]]:
+    """Merge quotes whose points sit within tolerance of the modal point.
+
+    Books often hang a total at 224.5 while others sit at 225 — treating
+    those as unrelated propositions starves the market of book depth. Quotes
+    within POINT_CLUSTER_TOLERANCE of the most common point per selection
+    are pooled under the modal identity. Pointless (h2h) quotes pass through.
+    """
+    by_name: dict[str, list[OutcomeQuote]] = defaultdict(list)
+    passthrough: dict[tuple[str, Optional[float]], list[OutcomeQuote]] = {}
+    for (name, point), outcome_quotes in quotes.items():
+        if point is None:
+            passthrough[(name, None)] = outcome_quotes
+        else:
+            by_name[name].extend(outcome_quotes)
+
+    clustered: dict[tuple[str, Optional[float]], list[OutcomeQuote]] = dict(passthrough)
+    for name, outcome_quotes in by_name.items():
+        counts = Counter(q.point for q in outcome_quotes)
+        anchor = counts.most_common(1)[0][0]
+        cluster = [
+            q
+            for q in outcome_quotes
+            if q.point is not None and abs(q.point - anchor) <= POINT_CLUSTER_TOLERANCE
+        ]
+        remainder = [q for q in outcome_quotes if q not in cluster]
+        if cluster:
+            clustered[(name, anchor)] = cluster
+        for q in remainder:
+            clustered.setdefault((name, q.point), []).append(q)
+    return clustered
+
+
 def evaluate_market(
     line_dicts: list[dict[str, Any]],
     market: str,
     *,
     min_books: int = 2,
 ) -> list[BetCandidate]:
-    """Rank outcomes of one market by expected value at the best price."""
+    """Rank outcomes of one market by expected value at the best price.
+
+    The fair-value benchmark is leave-one-out: the best-price book is
+    excluded from the consensus so it can't vouch for its own number.
+    """
+    quotes = _cluster_point_quotes(collect_outcome_quotes(line_dicts, market))
     candidates: list[BetCandidate] = []
-    for (name, point), outcome_quotes in collect_outcome_quotes(line_dicts, market).items():
+    for (name, point), outcome_quotes in quotes.items():
         if len(outcome_quotes) < min_books:
             continue
-        consensus = sum(q.fair_probability for q in outcome_quotes) / len(outcome_quotes)
         best = max(outcome_quotes, key=lambda q: q.price)
+        others = [q for q in outcome_quotes if q is not best]
+        consensus = sum(q.fair_probability for q in others) / len(others)
         implied = american_to_implied_prob(best.price)
         if implied <= 0:
             continue
         decimal = american_to_decimal(best.price)
         ev = consensus * (decimal - 1.0) - (1.0 - consensus)
+        mixed_points = len({q.point for q in outcome_quotes if q.point is not None}) > 1
         candidates.append(
             BetCandidate(
                 market=market,
                 selection=name,
-                point=point,
+                point=best.point if best.point is not None else point,
                 best_price=best.price,
                 best_bookmaker=best.bookmaker,
                 consensus_probability=round(consensus, 4),
@@ -190,6 +255,7 @@ def evaluate_market(
                 edge_pct=round((consensus - implied) * 100.0, 2),
                 ev_pct=round(ev * 100.0, 2),
                 book_count=len(outcome_quotes),
+                mixed_points=mixed_points,
             )
         )
     candidates.sort(key=lambda c: -c.ev_pct)
@@ -208,18 +274,29 @@ def kelly_fraction(probability: float, american_price: float) -> float:
 def _movement_favors(selection: str, movement_note: Optional[str]) -> bool:
     """True when the line moved toward (shortened on) the selection.
 
-    Movement notes look like "Chiefs: +120 -> +105"; a falling price for the
-    selection means the market is steaming toward it.
+    Movement notes look like "Chiefs: +120 -> +105" or, with points,
+    "Over: 224.5 (-110) -> 225.5 (-105)". Matching is anchored to the
+    "Name:" prefix so a selection can't match inside unrelated text, and a
+    rising implied probability on the selection means steam toward it.
     """
     if not movement_note:
         return False
     for part in movement_note.split(";"):
-        if selection not in part or "->" not in part:
+        part = part.strip()
+        if not part.startswith(f"{selection}:"):
             continue
         try:
-            before_raw, after_raw = part.split(":", 1)[1].split("->")
-            before = float(before_raw.strip().replace("+", ""))
-            after = float(after_raw.strip().replace("+", ""))
+            arrow = part.split(":", 1)[1]
+            before_raw, after_raw = arrow.split("->")
+
+            def _price(raw: str) -> float:
+                raw = raw.strip()
+                if "(" in raw and raw.endswith(")"):
+                    raw = raw[raw.rindex("(") + 1 : -1]
+                return float(raw.replace("+", ""))
+
+            before = _price(before_raw)
+            after = _price(after_raw)
         except (ValueError, IndexError):
             continue
         return american_to_implied_prob(after) > american_to_implied_prob(before)
@@ -267,6 +344,29 @@ def _format_price(price: float) -> str:
     return f"{price:+.0f}"
 
 
+def compute_confidence(
+    *,
+    edge_pct: float,
+    book_count: int,
+    movement_confirms: bool,
+    news_count: int,
+    persisted: bool = False,
+) -> float:
+    """0-10 confidence, scaled so routine mispricings land mid-range.
+
+    A 5-pt edge with 4 books and no confirmation scores ~4.4; saturation
+    requires a large edge plus deep books plus movement/news/persistence.
+    """
+    score = (
+        min(max(edge_pct, 0.0), 10.0) * 0.6
+        + min(book_count, 8) * 0.35
+        + (1.0 if movement_confirms else 0.0)
+        + min(news_count, 3) * 0.4
+        + (1.0 if persisted else 0.0)
+    )
+    return round(min(score, 10.0), 1)
+
+
 def analyze_game(
     *,
     event_key: str,
@@ -276,11 +376,15 @@ def analyze_game(
     away_team: str,
     commence_time: str,
     line_dicts: list[dict[str, Any]],
-    movement_note: Optional[str] = None,
+    movement_notes: Optional[dict[str, Optional[str]]] = None,
     news_count: int = 0,
     now: Optional[datetime] = None,
 ) -> Optional[BetDecision]:
-    """Produce the single best decision for a game, or None without pricing data."""
+    """Produce the single best decision for a game, or None without pricing data.
+
+    movement_notes is keyed by market ("h2h", "spreads", "totals") so the
+    confirmation signal matches the market actually being bet.
+    """
     from config import settings
 
     now = now or datetime.now(timezone.utc)
@@ -296,6 +400,8 @@ def analyze_game(
         return None
 
     best = max(candidates, key=lambda c: c.ev_pct)
+    movement_notes = movement_notes or {}
+    movement_note = movement_notes.get(best.market)
     movement_confirms = _movement_favors(best.selection, movement_note)
 
     meets_edge = best.edge_pct >= settings.sports_min_edge_pct
@@ -309,12 +415,11 @@ def analyze_game(
     else:
         decision = DECISION_PASS
 
-    confidence = min(
-        10.0,
-        max(best.edge_pct, 0.0) * 1.2
-        + min(best.book_count, 8) * 0.5
-        + (1.5 if movement_confirms else 0.0)
-        + min(news_count, 3) * 0.5,
+    confidence = compute_confidence(
+        edge_pct=best.edge_pct,
+        book_count=best.book_count,
+        movement_confirms=movement_confirms,
+        news_count=news_count,
     )
 
     full_kelly = kelly_fraction(best.consensus_probability, best.best_price)
@@ -331,9 +436,10 @@ def analyze_game(
     pick = f"{best.selection}{point_str} {market_label} {_format_price(best.best_price)} @ {best.best_bookmaker}"
 
     key_factors = [
-        f"Consensus fair probability {best.consensus_probability:.1%} vs "
-        f"{best.implied_probability:.1%} implied at best price ({best.edge_pct:+.1f} pts edge)",
-        f"Expected value {best.ev_pct:+.1f}% per unit staked across {best.book_count} books",
+        f"Fair probability {best.consensus_probability:.1%} (consensus of the other "
+        f"{best.book_count - 1} book(s)) vs {best.implied_probability:.1%} implied at the "
+        f"best price ({best.edge_pct:+.1f} pts edge)",
+        f"Expected value {best.ev_pct:+.1f}% per unit staked",
     ]
     if movement_confirms:
         key_factors.append(f"Line movement confirms: {movement_note}")
@@ -343,12 +449,16 @@ def analyze_game(
         key_factors.append(f"{news_count} matched news article(s) — read before firing")
 
     risks = [
-        "Consensus probability is derived from bookmaker prices, not a true model — "
+        "Fair value is derived from other bookmakers' prices, not a true outcome model — "
         "correlated book errors inflate apparent edge",
         "Late injury/lineup news can invalidate the number instantly",
     ]
     if best.book_count < settings.sports_min_books_for_decision:
         risks.append(f"Thin market: only {best.book_count} books quoting this outcome")
+    if best.mixed_points:
+        risks.append(
+            "Consensus pools quotes at nearby points — verify the exact number before betting"
+        )
     if abs(best.best_price) >= 250:
         risks.append("Longshot pricing — higher variance, small edges are less reliable")
 
@@ -390,7 +500,7 @@ def analyze_game(
         kelly_fraction=round(full_kelly, 4),
         stake_units=stake_units,
         decision=decision,
-        confidence=round(confidence, 1),
+        confidence=confidence,
         rationale=rationale,
         key_factors=key_factors,
         risks=risks,
@@ -398,6 +508,58 @@ def analyze_game(
         line_movement_note=movement_note,
         news_support_count=news_count,
     )
+
+
+def apply_persistence_policy(decision: BetDecision, has_recent_prior: bool) -> BetDecision:
+    """Demote a first-sighting BET to LEAN until the edge survives a scan.
+
+    A single stale quote can look like value for a few minutes; requiring
+    the edge to appear on two separate scans filters most of those. When the
+    edge has persisted, confidence gets a small bonus instead.
+    """
+    if decision.decision != DECISION_BET:
+        return decision
+    if has_recent_prior:
+        decision.confidence = min(10.0, round(decision.confidence + 1.0, 1))
+        decision.key_factors.append("Edge persisted across scans — not a transient quote")
+        return decision
+    decision.decision = DECISION_LEAN
+    decision.stake_units = 0.0
+    decision.rationale = (
+        f"LEAN (awaiting confirmation) {decision.selection} {decision.market_label} "
+        f"{_format_price(decision.best_price)} @ {decision.best_bookmaker}: "
+        f"{decision.ev_pct:+.1f}% EV on first sighting — promotes to BET if the edge "
+        f"survives the next scan."
+    )
+    decision.risks.append("First sighting — could be a transient stale quote")
+    return decision
+
+
+async def finalize_decisions(decisions: list[BetDecision]) -> list[BetDecision]:
+    """Apply the persistence policy against the decision log and record results."""
+    from config import settings
+    from database import get_prior_positive_decision, save_sports_bet_decision
+
+    if not settings.sports_require_edge_persistence:
+        for decision in decisions:
+            if decision.decision in (DECISION_BET, DECISION_LEAN):
+                await save_sports_bet_decision(decision_to_dict(decision))
+        return decisions
+
+    finalized: list[BetDecision] = []
+    for decision in decisions:
+        if decision.decision == DECISION_BET:
+            has_prior = await get_prior_positive_decision(
+                event_key=decision.event_key,
+                market=decision.market,
+                selection=decision.selection,
+                min_age_minutes=settings.sports_persistence_min_minutes,
+            )
+            decision = apply_persistence_policy(decision, has_prior)
+        if decision.decision in (DECISION_BET, DECISION_LEAN):
+            await save_sports_bet_decision(decision_to_dict(decision))
+        finalized.append(decision)
+    return finalized
 
 
 def _lines_from_raw_event(event: dict[str, Any]) -> list[dict[str, Any]]:
@@ -432,16 +594,16 @@ def analyze_raw_events(
         home = event.get("home_team", "")
         away = event.get("away_team", "")
         commence = event.get("commence_time", "")
-        event_key = event.get("id") or f"{sport_key}|{home}|{away}|{commence}"
+        news_key = event.get("id") or f"{sport_key}|{home}|{away}|{commence}"
         decision = analyze_game(
-            event_key=event_key,
+            event_key=event_key_for(sport_key, home, away, commence),
             sport_key=sport_key,
             sport_title=event.get("sport_title", sport_key),
             home_team=home,
             away_team=away,
             commence_time=commence,
             line_dicts=_lines_from_raw_event(event),
-            news_count=news_counts.get(event_key, 0),
+            news_count=news_counts.get(news_key, 0),
             now=now,
         )
         if decision:

@@ -1,8 +1,104 @@
 import { useEffect, useMemo, useState } from 'react'
-import { getSports } from '../api'
-import type { SportsBoardResponse, SportsGameCard } from '../types'
+import { getSports, getSportsRecord } from '../api'
+import type { SportsBetRecordResponse, SportsBoardResponse, SportsGameCard } from '../types'
 import { formatTime } from '../lib/format'
 import { BetDecisionBadge, BetDecisionPanel } from '../components/BetDecisionPanel'
+
+const STATUS_COLORS: Record<string, string> = {
+  won: 'text-research-green',
+  lost: 'text-research-red',
+  push: 'text-research-muted',
+  void: 'text-research-muted',
+  open: 'text-research-blue',
+}
+
+function TrackRecordStrip({ record }: { record: SportsBetRecordResponse }) {
+  const [open, setOpen] = useState(false)
+  const { stats, entries } = record
+  if (entries.length === 0) return null
+
+  return (
+    <section className="mb-8 rounded-2xl bg-research-surface px-5 py-4 shadow-soft">
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className="flex w-full flex-wrap items-center justify-between gap-3 text-left"
+      >
+        <div className="flex flex-wrap items-baseline gap-x-5 gap-y-1">
+          <span className="text-sm font-semibold uppercase tracking-wide text-research-muted">
+            Track record
+          </span>
+          <span className="font-mono text-sm font-semibold tabular-nums">
+            {stats.won}-{stats.lost}
+            {stats.push > 0 ? `-${stats.push}` : ''}
+            {stats.hit_rate != null ? ` (${(stats.hit_rate * 100).toFixed(0)}%)` : ''}
+          </span>
+          <span
+            className={`font-mono text-sm font-semibold tabular-nums ${
+              stats.units_pnl >= 0 ? 'text-research-green' : 'text-research-red'
+            }`}
+          >
+            {stats.units_pnl >= 0 ? '+' : ''}
+            {stats.units_pnl}u
+          </span>
+          {stats.avg_clv_pct != null && (
+            <span className="text-xs text-research-muted">
+              avg CLV{' '}
+              <span
+                className={`font-mono font-semibold tabular-nums ${
+                  stats.avg_clv_pct >= 0 ? 'text-research-green' : 'text-research-red'
+                }`}
+              >
+                {stats.avg_clv_pct >= 0 ? '+' : ''}
+                {stats.avg_clv_pct}%
+              </span>
+            </span>
+          )}
+          {stats.open > 0 && (
+            <span className="text-xs text-research-muted">{stats.open} open</span>
+          )}
+        </div>
+        <span className="text-xs text-research-muted">{open ? 'Hide' : 'Show'} bets</span>
+      </button>
+
+      {open && (
+        <div className="animate-fade-up mt-4 space-y-2">
+          {entries.slice(0, 20).map((entry) => (
+            <div
+              key={entry.id}
+              className="flex flex-wrap items-center justify-between gap-2 rounded-2xl bg-research-bg px-4 py-2.5 text-sm"
+            >
+              <div>
+                <span className="font-medium text-research-ink">{entry.matchup}</span>
+                <span className="ml-2 font-mono text-xs tabular-nums text-research-muted">
+                  {entry.selection} {entry.market} {entry.best_price > 0 ? '+' : ''}
+                  {entry.best_price} · {entry.stake_units}u
+                </span>
+              </div>
+              <div className="flex items-center gap-3">
+                {entry.clv_pct != null && (
+                  <span
+                    className={`font-mono text-xs tabular-nums ${
+                      entry.clv_pct >= 0 ? 'text-research-green' : 'text-research-red'
+                    }`}
+                  >
+                    CLV {entry.clv_pct >= 0 ? '+' : ''}
+                    {entry.clv_pct}%
+                  </span>
+                )}
+                <span
+                  className={`text-xs font-bold uppercase ${STATUS_COLORS[entry.status] ?? ''}`}
+                >
+                  {entry.status}
+                </span>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  )
+}
 
 type SortMode = 'relevance' | 'soonest'
 
@@ -106,6 +202,7 @@ function GameRow({ game }: { game: SportsGameCard }) {
 
 export function SportsBoardPage() {
   const [board, setBoard] = useState<SportsBoardResponse | null>(null)
+  const [record, setRecord] = useState<SportsBetRecordResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [sportFilter, setSportFilter] = useState<string>('all')
@@ -124,6 +221,11 @@ export function SportsBoardPage() {
         }
       })
       .finally(() => setLoading(false))
+    getSportsRecord(controller.signal)
+      .then(setRecord)
+      .catch(() => {
+        // Track record is supplementary; the board still renders without it.
+      })
     return () => controller.abort()
   }, [])
 
@@ -208,6 +310,8 @@ export function SportsBoardPage() {
           </select>
         </div>
       </div>
+
+      {record && <TrackRecordStrip record={record} />}
 
       {board.best_bets.length > 0 && (
         <section className="mb-8">

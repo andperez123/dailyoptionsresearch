@@ -40,11 +40,11 @@ def best_price_for_outcome(outcomes: list[dict[str, Any]], name: str) -> Optiona
     return max(matches, key=lambda o: float(o.get("price", -99999)))
 
 
-def best_h2h_line(lines: list[dict[str, Any]]) -> Optional[dict[str, Any]]:
-    """Pick best price per outcome across bookmakers for h2h market."""
+def best_market_line(lines: list[dict[str, Any]], market: str) -> Optional[dict[str, Any]]:
+    """Pick best price per outcome name across bookmakers for a market."""
     by_name: dict[str, dict[str, Any]] = {}
     for line in lines:
-        if line.get("market") != "h2h":
+        if line.get("market") != market:
             continue
         bookmaker = line.get("bookmaker", "")
         for outcome in line.get("outcomes", []):
@@ -54,11 +54,14 @@ def best_h2h_line(lines: list[dict[str, Any]]) -> Optional[dict[str, Any]]:
             price = float(outcome.get("price", 0))
             current = by_name.get(name)
             if current is None or price > float(current.get("price", -99999)):
-                by_name[name] = {
+                entry = {
                     "name": name,
                     "price": price,
                     "bookmaker": bookmaker,
                 }
+                if outcome.get("point") is not None:
+                    entry["point"] = outcome.get("point")
+                by_name[name] = entry
     if not by_name:
         return None
     outcomes = list(by_name.values())
@@ -69,28 +72,51 @@ def best_h2h_line(lines: list[dict[str, Any]]) -> Optional[dict[str, Any]]:
     }
 
 
+def best_h2h_line(lines: list[dict[str, Any]]) -> Optional[dict[str, Any]]:
+    """Pick best price per outcome across bookmakers for h2h market."""
+    return best_market_line(lines, "h2h")
+
+
 def line_movement_delta(
     opening: Optional[dict[str, Any]],
     current: Optional[dict[str, Any]],
 ) -> Optional[str]:
     if not opening or not current:
         return None
-    opening_outcomes = {
-        o.get("name"): float(o.get("price", 0))
-        for o in opening.get("outcomes", [])
-        if o.get("name")
-    }
-    current_outcomes = {
-        o.get("name"): float(o.get("price", 0))
-        for o in current.get("outcomes", [])
-        if o.get("name")
-    }
+
+    def _index(line: dict[str, Any]) -> dict[str, tuple[float, Optional[float]]]:
+        indexed: dict[str, tuple[float, Optional[float]]] = {}
+        for o in line.get("outcomes", []):
+            name = o.get("name")
+            if not name:
+                continue
+            point = o.get("point")
+            indexed[name] = (float(o.get("price", 0)), float(point) if point is not None else None)
+        return indexed
+
+    opening_outcomes = _index(opening)
+    current_outcomes = _index(current)
     deltas: list[str] = []
-    for name, current_price in current_outcomes.items():
-        opening_price = opening_outcomes.get(name)
-        if opening_price is None or opening_price == current_price:
+    for name, (current_price, current_point) in current_outcomes.items():
+        opened = opening_outcomes.get(name)
+        if opened is None:
             continue
-        deltas.append(f"{name}: {opening_price:+.0f} -> {current_price:+.0f}")
+        opening_price, opening_point = opened
+        price_moved = opening_price != current_price
+        point_moved = (
+            opening_point is not None
+            and current_point is not None
+            and opening_point != current_point
+        )
+        if not price_moved and not point_moved:
+            continue
+        if point_moved:
+            deltas.append(
+                f"{name}: {opening_point:g} ({opening_price:+.0f}) -> "
+                f"{current_point:g} ({current_price:+.0f})"
+            )
+        else:
+            deltas.append(f"{name}: {opening_price:+.0f} -> {current_price:+.0f}")
     if not deltas:
         return None
     return "; ".join(deltas)

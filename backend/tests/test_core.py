@@ -389,6 +389,159 @@ def test_evaluate_market_finds_edge_at_soft_book() -> None:
     assert best.ev_pct > 3.0
 
 
+def test_evaluate_market_consensus_excludes_best_price_book() -> None:
+    """Leave-one-out: the soft book must not vouch for its own number."""
+    from pipeline.sports_strategies import evaluate_market
+
+    candidates = evaluate_market(_mispriced_lines(), "h2h", min_books=2)
+    best = candidates[0]
+    # Sharp books alone imply ~58% for Team A; including the soft book's own
+    # quote would drag consensus to ~55% and edge to ~6.4 pts. Edge above 8
+    # proves the best-price book was excluded from its benchmark.
+    assert best.edge_pct > 8.0
+    assert round(best.consensus_probability, 2) == 0.58
+
+
+def test_evaluate_market_clusters_nearby_total_points() -> None:
+    from pipeline.sports_strategies import evaluate_market
+
+    lines = [
+        {
+            "bookmaker": "Book 1",
+            "market": "totals",
+            "outcomes": [
+                {"name": "Over", "price": -110, "point": 224.5},
+                {"name": "Under", "price": -110, "point": 224.5},
+            ],
+        },
+        {
+            "bookmaker": "Book 2",
+            "market": "totals",
+            "outcomes": [
+                {"name": "Over", "price": -112, "point": 224.5},
+                {"name": "Under", "price": -108, "point": 224.5},
+            ],
+        },
+        {
+            "bookmaker": "Book 3",
+            "market": "totals",
+            "outcomes": [
+                {"name": "Over", "price": 100, "point": 225.0},
+                {"name": "Under", "price": -120, "point": 225.0},
+            ],
+        },
+    ]
+    candidates = evaluate_market(lines, "totals", min_books=3)
+    assert candidates, "quotes at 224.5 and 225.0 should pool into one cluster"
+    best = candidates[0]
+    assert best.book_count == 3
+    assert best.mixed_points is True
+
+
+def test_movement_favors_requires_exact_name_anchor() -> None:
+    from pipeline.sports_strategies import _movement_favors
+
+    assert _movement_favors("Over", "Over: +110 -> -105") is True
+    assert _movement_favors("Over", "Overtime Kings: +110 -> -105") is False
+    assert _movement_favors("Over", "Over: 224.5 (+110) -> 225.5 (-105)") is True
+
+
+def test_apply_persistence_policy_demotes_first_sighting() -> None:
+    from pipeline.sports_strategies import analyze_game, apply_persistence_policy
+
+    now = utc_now()
+    decision = analyze_game(
+        event_key="evt-persist",
+        sport_key="basketball_nba",
+        sport_title="NBA",
+        home_team="Home",
+        away_team="Away",
+        commence_time=(now + timedelta(hours=24)).isoformat(),
+        line_dicts=_mispriced_lines(),
+        now=now,
+    )
+    assert decision is not None and decision.decision == "bet"
+
+    demoted = apply_persistence_policy(decision, has_recent_prior=False)
+    assert demoted.decision == "lean"
+    assert demoted.stake_units == 0.0
+
+    fresh = analyze_game(
+        event_key="evt-persist",
+        sport_key="basketball_nba",
+        sport_title="NBA",
+        home_team="Home",
+        away_team="Away",
+        commence_time=(now + timedelta(hours=24)).isoformat(),
+        line_dicts=_mispriced_lines(),
+        now=now,
+    )
+    confirmed = apply_persistence_policy(fresh, has_recent_prior=True)
+    assert confirmed.decision == "bet"
+    assert confirmed.stake_units > 0
+
+
+def test_analyze_game_rejects_games_already_started() -> None:
+    from pipeline.sports_strategies import analyze_game
+
+    now = utc_now()
+    decision = analyze_game(
+        event_key="evt-live",
+        sport_key="basketball_nba",
+        sport_title="NBA",
+        home_team="Home",
+        away_team="Away",
+        commence_time=(now - timedelta(hours=1)).isoformat(),
+        line_dicts=_mispriced_lines(),
+        now=now,
+    )
+    assert decision is None
+
+
+def test_grade_outcome_settles_all_markets() -> None:
+    from pipeline.sports_grading import grade_outcome
+
+    common = {"home_team": "Home", "away_team": "Away", "home_score": 110, "away_score": 100}
+    assert grade_outcome(market="h2h", selection="Home", point=None, **common) == "won"
+    assert grade_outcome(market="h2h", selection="Away", point=None, **common) == "lost"
+    assert grade_outcome(market="spreads", selection="Away", point=12.5, **common) == "won"
+    assert grade_outcome(market="spreads", selection="Away", point=10.0, **common) == "push"
+    assert grade_outcome(market="spreads", selection="Home", point=-12.5, **common) == "lost"
+    assert grade_outcome(market="totals", selection="Over", point=205.5, **common) == "won"
+    assert grade_outcome(market="totals", selection="Under", point=205.5, **common) == "lost"
+    assert grade_outcome(market="totals", selection="Over", point=210.0, **common) == "push"
+
+
+def test_compute_clv_pct_positive_when_beating_close() -> None:
+    from pipeline.sports_grading import compute_clv_pct
+
+    # Bet at +105, market closed -110 on the same side: we beat the close.
+    assert compute_clv_pct(105, -110) > 0
+    # Bet at -120, market closed +100: the market moved against us.
+    assert compute_clv_pct(-120, 100) < 0
+    assert compute_clv_pct(105, None) is None
+
+
+def test_compute_record_stats_aggregates_units_and_clv() -> None:
+    from pipeline.sports_grading import compute_record_stats
+
+    entries = [
+        {"status": "won", "stake_units": 1.0, "best_price": 100, "clv_pct": 2.0},
+        {"status": "lost", "stake_units": 2.0, "best_price": -110, "clv_pct": -1.0},
+        {"status": "open", "stake_units": 1.5, "best_price": -105, "clv_pct": None},
+    ]
+    stats = compute_record_stats(entries)
+    assert stats["won"] == 1
+    assert stats["lost"] == 1
+    assert stats["open"] == 1
+    assert stats["settled"] == 2
+    assert stats["hit_rate"] == 0.5
+    # Won 1u at +100 (+1.0), lost 2u (-2.0)
+    assert stats["units_pnl"] == -1.0
+    assert stats["units_staked"] == 3.0
+    assert stats["avg_clv_pct"] == 0.5
+
+
 def test_analyze_game_bets_mispriced_outcome_within_horizon() -> None:
     from pipeline.sports_strategies import analyze_game
 

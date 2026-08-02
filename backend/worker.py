@@ -21,6 +21,7 @@ from pipeline.catalyst import run_calendar_sync, run_catalyst_scan
 from pipeline.market_data import collect_pulse_snapshots, market_status_now
 from pipeline.run import run_pipeline
 from pipeline.sports import build_sports_board
+from pipeline.sports_grading import grade_open_sports_bets
 from time_utils import utc_now_iso
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -63,7 +64,12 @@ async def job_sports_odds() -> None:
     logger.info("Refreshing sports odds")
     board = await build_sports_board(force=True)
     await set_pipeline_state("last_sports_scan", utc_now_iso())
-    logger.info("Sports board: %s games", len(board.games))
+    logger.info(
+        "Sports board: %s games, %s best bets", len(board.games), len(board.best_bets)
+    )
+    graded = await grade_open_sports_bets()
+    if any(graded.values()):
+        logger.info("Graded sports bets: %s", graded)
 
 
 async def job_daily_briefing() -> None:

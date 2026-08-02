@@ -19,7 +19,7 @@ from pipeline.odds import collect_sports_odds
 from pipeline.options import collect_options
 from pipeline.reddit import collect_reddit_posts, count_ticker_mentions
 from pipeline.sports_news import attach_news_to_events, collect_sports_news, feed_keys_for_sport
-from pipeline.sports_strategies import analyze_raw_events
+from pipeline.sports_strategies import analyze_raw_events, finalize_decisions
 from pipeline.synthesis import compute_buzz_delta, select_top_tickers, synthesize_briefing
 from pipeline.odds import fetch_raw_odds_events
 from time_utils import utc_now
@@ -55,10 +55,12 @@ async def run_pipeline(briefing_date: date | None = None) -> BriefingContent:
                 feed_keys.update(feed_keys_for_sport(event.get("sport_key", "")))
             sports_news_items = await collect_sports_news(sorted(feed_keys))
             enriched_events, sports_news_counts = attach_news_to_events(raw_events, sports_news_items)
-            sports_bet_decisions = analyze_raw_events(
-                enriched_events,
-                news_counts=sports_news_counts,
-                now=utc_now(),
+            sports_bet_decisions = await finalize_decisions(
+                analyze_raw_events(
+                    enriched_events,
+                    news_counts=sports_news_counts,
+                    now=utc_now(),
+                )
             )
             sports_news_payload = [
                 {

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import logging
 from datetime import datetime
 from typing import Any, Optional
@@ -14,10 +13,17 @@ from models import (
     SportsOddsLine,
 )
 from pipeline.odds import fetch_raw_odds_events, get_last_odds_quota
-from pipeline.odds_math import best_h2h_line, line_movement_delta
+from pipeline.odds_math import best_h2h_line, best_market_line, line_movement_delta
 from pipeline.odds_relevance import rank_events
 from pipeline.sports_news import attach_news_to_events, collect_sports_news, feed_keys_for_sport
-from pipeline.sports_strategies import DECISION_BET, analyze_game, decision_to_dict, within_bet_horizon
+from pipeline.sports_strategies import (
+    DECISION_BET,
+    analyze_game,
+    decision_to_dict,
+    event_key_for,
+    finalize_decisions,
+    within_bet_horizon,
+)
 from time_utils import parse_datetime, utc_now
 
 logger = logging.getLogger(__name__)
@@ -25,10 +31,40 @@ logger = logging.getLogger(__name__)
 _last_fetch: Optional[datetime] = None
 _cached_board: Optional[SportsBoardResponse] = None
 
+DECISION_MARKETS = ("h2h", "spreads", "totals")
+# Snapshot rows from one board build differ by milliseconds; group within this.
+_OPENING_BATCH_WINDOW_SECONDS = 600.0
 
-def _event_key(sport: str, home: str, away: str, commence: str) -> str:
-    raw = f"{sport}|{home}|{away}|{commence}"
-    return hashlib.md5(raw.encode()).hexdigest()
+
+def _opening_line(history: list[dict[str, Any]], market: str) -> Optional[dict[str, Any]]:
+    """Best-across-books line from the earliest snapshot batch.
+
+    History rows are per-bookmaker; comparing a single book's opener against
+    today's best-across-books line would manufacture fake movement, so the
+    opener is reconstructed the same way (best price per outcome across the
+    books captured in the first scan)."""
+    if not history:
+        return None
+    try:
+        first_ts = parse_datetime(history[0]["snapshot_at"])
+    except (TypeError, ValueError, KeyError):
+        return None
+    batch: list[dict[str, Any]] = []
+    for row in history:
+        try:
+            ts = parse_datetime(row["snapshot_at"])
+        except (TypeError, ValueError, KeyError):
+            continue
+        if (ts - first_ts).total_seconds() > _OPENING_BATCH_WINDOW_SECONDS:
+            break
+        batch.append(
+            {
+                "bookmaker": row.get("bookmaker", ""),
+                "market": market,
+                "outcomes": (row.get("line") or {}).get("outcomes", []),
+            }
+        )
+    return best_market_line(batch, market)
 
 
 def _is_live_window(commence_time: str, now: datetime) -> bool:
@@ -88,12 +124,17 @@ async def build_sports_board(
         home = item.get("home_team", "")
         away = item.get("away_team", "")
         commence = item.get("commence_time", "")
-        # Hard horizon: only analyze games commencing within N days (default 3)
+        # Hard horizon: only show games within N days (default 3). Live games
+        # stay visible on the board; decisions themselves require the game to
+        # be strictly in the future (enforced inside analyze_game).
         if not within_bet_horizon(
-            commence, now, horizon_days=settings.sports_bet_horizon_days
+            commence,
+            now,
+            horizon_days=settings.sports_bet_horizon_days,
+            allow_live_hours=3.0,
         ):
             continue
-        event_key = _event_key(sport, home, away, commence)
+        event_key = event_key_for(sport, home, away, commence)
         lines: list[SportsOddsLine] = []
         line_dicts: list[dict[str, Any]] = []
 
@@ -127,10 +168,18 @@ async def build_sports_board(
                     line={"outcomes": outcomes},
                 )
 
-        history = await get_sports_odds_history(event_key, "h2h", limit=5)
-        opening = history[0]["line"] if history else None
+        movement_notes: dict[str, Optional[str]] = {}
+        openings: dict[str, Optional[dict[str, Any]]] = {}
+        for market_key in DECISION_MARKETS:
+            history = await get_sports_odds_history(event_key, market_key, limit=200)
+            market_opening = _opening_line(history, market_key)
+            market_current = best_market_line(line_dicts, market_key)
+            openings[market_key] = market_opening
+            movement_notes[market_key] = line_movement_delta(market_opening, market_current)
+
+        opening = openings.get("h2h")
         current = best_h2h_line(line_dicts)
-        movement = line_movement_delta(opening, current)
+        movement = movement_notes.get("h2h")
 
         news_context = [
             SportsNewsContext(
@@ -151,10 +200,12 @@ async def build_sports_board(
             away_team=away,
             commence_time=commence,
             line_dicts=line_dicts,
-            movement_note=movement,
+            movement_notes=movement_notes,
             news_count=len(news_context),
             now=now,
         )
+        if decision:
+            decision = (await finalize_decisions([decision]))[0]
         bet_decision = (
             SportsBetDecision.model_validate(decision_to_dict(decision)) if decision else None
         )

@@ -9,7 +9,15 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from database import init_db, save_briefing
-from models import BriefingContent, Narrative, OptionsPlay, RadarItem, SourceLink, SportsAngle
+from models import (
+    BriefingContent,
+    Narrative,
+    OptionsPlay,
+    RadarItem,
+    SourceLink,
+    SportsAngle,
+    SportsBetDecision,
+)
 
 
 async def seed() -> None:
@@ -133,6 +141,52 @@ async def seed() -> None:
                         source_type="reddit",
                     )
                 ],
+                bet_decision=SportsBetDecision(
+                    event_key="demo-nba",
+                    sport_key="basketball_nba",
+                    sport_title="NBA",
+                    home_team="Celtics",
+                    away_team="Lakers",
+                    matchup="Lakers @ Celtics",
+                    commence_time=datetime.utcnow().isoformat() + "Z",
+                    market="totals",
+                    market_label="total",
+                    selection="Under",
+                    point=232.5,
+                    best_price=-105,
+                    best_bookmaker="DraftKings",
+                    consensus_probability=0.545,
+                    implied_probability=0.512,
+                    edge_pct=3.3,
+                    ev_pct=6.4,
+                    kelly_fraction=0.069,
+                    stake_units=1.7,
+                    decision="bet",
+                    confidence=6.2,
+                    rationale=(
+                        "BET Under 232.5 total -105 @ DraftKings: the best available price is "
+                        "meaningfully better than the cross-book fair value (+6.4% EV). "
+                        "Stake 1.7u (quarter-Kelly, capped)."
+                    ),
+                    key_factors=[
+                        "Fair probability 54.5% (consensus of the other 3 book(s)) vs 51.2% "
+                        "implied at the best price (+3.3 pts edge)",
+                        "Expected value +6.4% per unit staked",
+                        "Edge persisted across scans — not a transient quote",
+                    ],
+                    risks=[
+                        "Fair value is derived from other bookmakers' prices, not a true "
+                        "outcome model — correlated book errors inflate apparent edge",
+                        "Late injury/lineup news can invalidate the number instantly",
+                    ],
+                    research_checklist=[
+                        "Check rest spots: back-to-backs and 3-games-in-4-nights fade legs",
+                        "Confirm star-player load management status",
+                        "Re-check the line at 2-3 books right before bet placement — edge decays fast",
+                    ],
+                    line_movement_note="Under: 228.5 (-110) -> 232.5 (-105)",
+                    news_support_count=1,
+                ),
             )
         ],
         radar=[

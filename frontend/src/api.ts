@@ -6,6 +6,7 @@ import type {
   DeepDiveResponse,
   PulseResponse,
   ResearchStatus,
+  SportsBetRecordResponse,
   SportsBoardResponse,
   WireResponse,
 } from './types'
@@ -99,6 +100,10 @@ export function getDeepDive(ticker: string, signal?: AbortSignal): Promise<DeepD
 export function getSports(signal?: AbortSignal, sport?: string): Promise<SportsBoardResponse> {
   const qs = sport ? `?sport=${encodeURIComponent(sport)}` : ''
   return fetchJson<SportsBoardResponse>(`/sports${qs}`, { signal })
+}
+
+export function getSportsRecord(signal?: AbortSignal, limit = 100): Promise<SportsBetRecordResponse> {
+  return fetchJson<SportsBetRecordResponse>(`/sports/record?limit=${limit}`, { signal })
 }
 
 export function runCatalystScan(): Promise<{ status: string }> {

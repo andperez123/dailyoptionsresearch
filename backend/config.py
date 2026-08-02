@@ -51,6 +51,8 @@ class Settings(BaseSettings):
     sports_min_books_for_decision: int = 3
     sports_kelly_multiplier: float = 0.25
     sports_max_stake_units: float = 3.0
+    sports_require_edge_persistence: bool = True
+    sports_persistence_min_minutes: int = 30
     openai_use_web_search: bool = True
     openai_web_search_context: str = "medium"
     openai_deep_research_enabled: bool = False

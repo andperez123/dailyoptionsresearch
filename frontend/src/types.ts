@@ -90,6 +90,54 @@ export interface SportsBetDecision {
   news_support_count: number
 }
 
+export interface SportsBetRecordEntry {
+  id: number
+  event_key: string
+  sport_key: string
+  sport_title: string
+  home_team: string
+  away_team: string
+  matchup: string
+  commence_time: string
+  market: string
+  selection: string
+  point: number | null
+  best_price: number
+  best_bookmaker: string
+  edge_pct: number
+  ev_pct: number
+  stake_units: number
+  decision: string
+  confidence: number
+  rationale: string
+  decided_at: string
+  status: 'open' | 'won' | 'lost' | 'push' | 'void'
+  closing_price: number | null
+  clv_pct: number | null
+  home_score: number | null
+  away_score: number | null
+  settled_at: string | null
+}
+
+export interface SportsBetRecordStats {
+  won: number
+  lost: number
+  push: number
+  void: number
+  open: number
+  settled: number
+  hit_rate: number | null
+  units_staked: number
+  units_pnl: number
+  roi_pct: number | null
+  avg_clv_pct: number | null
+}
+
+export interface SportsBetRecordResponse {
+  entries: SportsBetRecordEntry[]
+  stats: SportsBetRecordStats
+}
+
 export interface SportsAngle {
   title: string
   sport: string

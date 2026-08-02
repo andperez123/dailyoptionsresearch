@@ -307,6 +307,44 @@ class SportsBoardResponse(BaseModel):
     bet_horizon_days: int = 3
 
 
+class SportsBetRecordEntry(BaseModel):
+    """A logged bet decision with settlement state (from the decision log)."""
+
+    model_config = {"extra": "ignore"}
+
+    id: int
+    event_key: str = ""
+    sport_key: str = ""
+    sport_title: str = ""
+    home_team: str = ""
+    away_team: str = ""
+    matchup: str = ""
+    commence_time: str = ""
+    market: str = ""
+    selection: str = ""
+    point: Optional[float] = None
+    best_price: float = 0.0
+    best_bookmaker: str = ""
+    edge_pct: float = 0.0
+    ev_pct: float = 0.0
+    stake_units: float = 0.0
+    decision: str = "bet"
+    confidence: float = 0.0
+    rationale: str = ""
+    decided_at: str = ""
+    status: str = "open"
+    closing_price: Optional[float] = None
+    clv_pct: Optional[float] = None
+    home_score: Optional[int] = None
+    away_score: Optional[int] = None
+    settled_at: Optional[str] = None
+
+
+class SportsBetRecordResponse(BaseModel):
+    entries: list[SportsBetRecordEntry] = Field(default_factory=list)
+    stats: dict[str, Any] = Field(default_factory=dict)
+
+
 class CatalystFeedbackRequest(BaseModel):
     label: str
     notes: str = ""
