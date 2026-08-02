@@ -6,11 +6,18 @@ from datetime import datetime
 from typing import Any, Optional
 
 from database import get_sports_odds_history, save_sports_odds_snapshot
-from models import SportsBoardResponse, SportsGameCard, SportsNewsContext, SportsOddsLine
+from models import (
+    SportsBetDecision,
+    SportsBoardResponse,
+    SportsGameCard,
+    SportsNewsContext,
+    SportsOddsLine,
+)
 from pipeline.odds import fetch_raw_odds_events, get_last_odds_quota
 from pipeline.odds_math import best_h2h_line, line_movement_delta
 from pipeline.odds_relevance import rank_events
 from pipeline.sports_news import attach_news_to_events, collect_sports_news, feed_keys_for_sport
+from pipeline.sports_strategies import DECISION_BET, analyze_game, decision_to_dict, within_bet_horizon
 from time_utils import parse_datetime, utc_now
 
 logger = logging.getLogger(__name__)
@@ -81,6 +88,11 @@ async def build_sports_board(
         home = item.get("home_team", "")
         away = item.get("away_team", "")
         commence = item.get("commence_time", "")
+        # Hard horizon: only analyze games commencing within N days (default 3)
+        if not within_bet_horizon(
+            commence, now, horizon_days=settings.sports_bet_horizon_days
+        ):
+            continue
         event_key = _event_key(sport, home, away, commence)
         lines: list[SportsOddsLine] = []
         line_dicts: list[dict[str, Any]] = []
@@ -131,7 +143,25 @@ async def build_sports_board(
             for n in item.get("news_context", [])
         ]
 
+        decision = analyze_game(
+            event_key=event_key,
+            sport_key=sport,
+            sport_title=item.get("sport_title", sport),
+            home_team=home,
+            away_team=away,
+            commence_time=commence,
+            line_dicts=line_dicts,
+            movement_note=movement,
+            news_count=len(news_context),
+            now=now,
+        )
+        bet_decision = (
+            SportsBetDecision.model_validate(decision_to_dict(decision)) if decision else None
+        )
+
         ai_context_parts: list[str] = []
+        if bet_decision:
+            ai_context_parts.append(bet_decision.rationale)
         if movement:
             ai_context_parts.append(f"Line movement: {movement}")
         if news_context:
@@ -162,9 +192,15 @@ async def build_sports_board(
                 is_live_window=_is_live_window(commence, now),
                 news_context=news_context,
                 ai_context=ai_context,
+                bet_decision=bet_decision,
                 data_timestamp=now,
             )
         )
+
+    best_bets = sorted(
+        (g.bet_decision for g in games if g.bet_decision and g.bet_decision.decision == DECISION_BET),
+        key=lambda d: -d.ev_pct,
+    )
 
     quota = get_last_odds_quota()
     board = SportsBoardResponse(
@@ -175,6 +211,8 @@ async def build_sports_board(
         active_sports_count=len({g.sport_key for g in games}),
         quota_remaining=quota.remaining,
         quota_used=quota.used,
+        best_bets=best_bets,
+        bet_horizon_days=settings.sports_bet_horizon_days,
     )
     _cached_board = board
     _last_fetch = now

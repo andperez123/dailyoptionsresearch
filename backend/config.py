@@ -44,6 +44,13 @@ class Settings(BaseSettings):
     odds_max_events: int = 24
     odds_max_bookmakers_briefing: int = 3
     odds_league_interest_bias: dict[str, float] = {}
+    # Sports bet decision engine
+    sports_bet_horizon_days: int = 3
+    sports_min_edge_pct: float = 2.0
+    sports_min_ev_pct: float = 3.0
+    sports_min_books_for_decision: int = 3
+    sports_kelly_multiplier: float = 0.25
+    sports_max_stake_units: float = 3.0
     openai_use_web_search: bool = True
     openai_web_search_context: str = "medium"
     openai_deep_research_enabled: bool = False

@@ -358,6 +358,175 @@ def test_validate_narratives_drops_single_source_when_required() -> None:
     assert soft[0]["options_plays"][0]["strategy_type"] == "debit_call_spread"
 
 
+def _mispriced_lines() -> list[dict]:
+    """Three sharp books price Team A ~ -150; one soft book hangs +105."""
+    sharp = {
+        "market": "h2h",
+        "outcomes": [{"name": "Team A", "price": -150}, {"name": "Team B", "price": 130}],
+    }
+    return [
+        {**sharp, "bookmaker": "Book 1"},
+        {**sharp, "bookmaker": "Book 2"},
+        {**sharp, "bookmaker": "Book 3"},
+        {
+            "bookmaker": "Soft Book",
+            "market": "h2h",
+            "outcomes": [{"name": "Team A", "price": 105}, {"name": "Team B", "price": -125}],
+        },
+    ]
+
+
+def test_evaluate_market_finds_edge_at_soft_book() -> None:
+    from pipeline.sports_strategies import evaluate_market
+
+    candidates = evaluate_market(_mispriced_lines(), "h2h", min_books=2)
+    assert candidates
+    best = candidates[0]
+    assert best.selection == "Team A"
+    assert best.best_bookmaker == "Soft Book"
+    assert best.best_price == 105
+    assert best.edge_pct > 2.0
+    assert best.ev_pct > 3.0
+
+
+def test_analyze_game_bets_mispriced_outcome_within_horizon() -> None:
+    from pipeline.sports_strategies import analyze_game
+
+    now = utc_now()
+    decision = analyze_game(
+        event_key="evt1",
+        sport_key="basketball_nba",
+        sport_title="NBA",
+        home_team="Home",
+        away_team="Away",
+        commence_time=(now + timedelta(hours=24)).isoformat(),
+        line_dicts=_mispriced_lines(),
+        news_count=2,
+        now=now,
+    )
+    assert decision is not None
+    assert decision.decision == "bet"
+    assert decision.selection == "Team A"
+    assert decision.stake_units > 0
+    assert decision.confidence > 0
+    assert decision.research_checklist
+    assert any("rest" in item.lower() or "back-to-back" in item.lower() for item in decision.research_checklist)
+
+
+def test_analyze_game_rejects_games_beyond_horizon() -> None:
+    from pipeline.sports_strategies import analyze_game, within_bet_horizon
+
+    now = utc_now()
+    far_out = (now + timedelta(days=5)).isoformat()
+    assert not within_bet_horizon(far_out, now, horizon_days=3)
+    decision = analyze_game(
+        event_key="evt2",
+        sport_key="basketball_nba",
+        sport_title="NBA",
+        home_team="Home",
+        away_team="Away",
+        commence_time=far_out,
+        line_dicts=_mispriced_lines(),
+        now=now,
+    )
+    assert decision is None
+
+
+def test_analyze_game_passes_on_efficient_market() -> None:
+    from pipeline.sports_strategies import analyze_game
+
+    now = utc_now()
+    efficient = {
+        "market": "h2h",
+        "outcomes": [{"name": "Team A", "price": -110}, {"name": "Team B", "price": -110}],
+    }
+    decision = analyze_game(
+        event_key="evt3",
+        sport_key="americanfootball_nfl",
+        sport_title="NFL",
+        home_team="Home",
+        away_team="Away",
+        commence_time=(now + timedelta(hours=12)).isoformat(),
+        line_dicts=[
+            {**efficient, "bookmaker": "Book 1"},
+            {**efficient, "bookmaker": "Book 2"},
+            {**efficient, "bookmaker": "Book 3"},
+        ],
+        now=now,
+    )
+    assert decision is not None
+    assert decision.decision == "pass"
+    assert decision.stake_units == 0
+
+
+def test_kelly_fraction_positive_only_with_edge() -> None:
+    from pipeline.sports_strategies import kelly_fraction
+
+    assert kelly_fraction(0.55, 105) > 0
+    assert kelly_fraction(0.45, -110) == 0.0
+
+
+def test_validate_sports_angles_attaches_engine_decision() -> None:
+    from pipeline.sports_strategies import analyze_raw_events
+
+    now = utc_now()
+    raw_event = {
+        "id": "wc1",
+        "sport_key": "soccer_fifa_world_cup",
+        "sport_title": "FIFA World Cup",
+        "home_team": "France",
+        "away_team": "Brazil",
+        "commence_time": (now + timedelta(hours=20)).isoformat(),
+        "bookmakers": [
+            {
+                "title": bookmaker,
+                "markets": [
+                    {
+                        "key": "h2h",
+                        "outcomes": [
+                            {"name": "France", "price": -150 if bookmaker != "Soft" else 105},
+                            {"name": "Brazil", "price": 130 if bookmaker != "Soft" else -125},
+                        ],
+                    }
+                ],
+            }
+            for bookmaker in ("Book 1", "Book 2", "Book 3", "Soft")
+        ],
+    }
+    decisions = analyze_raw_events([raw_event], now=now)
+    assert decisions and decisions[0].decision == "bet"
+
+    odds = [
+        SportsEvent(
+            sport="soccer_fifa_world_cup",
+            sport_title="FIFA World Cup",
+            home_team="France",
+            away_team="Brazil",
+            commence_time=raw_event["commence_time"],
+            event_id="wc1",
+        )
+    ]
+    valid = validate_sports_angles(
+        [
+            {
+                "title": "Value on France",
+                "sport": "FIFA World Cup",
+                "matchup": "Brazil @ France",
+                "narrative": "Soft book hanging a stale number",
+                "sources": [{"title": "ESPN", "url": "https://espn.com/story", "source_type": "news"}],
+                "degen_score": 3,
+            }
+        ],
+        odds,
+        [],
+        bet_decisions=decisions,
+    )
+    assert len(valid) == 1
+    assert valid[0].bet_decision is not None
+    assert valid[0].bet_decision.decision == "bet"
+    assert valid[0].bet_decision.selection == "France"
+
+
 def test_score_event_relevance_increases_with_news_hits() -> None:
     event = {
         "sport_key": "soccer_epl",

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { SportsAngle } from '../types'
 import { DegenScore } from './DegenScore'
+import { BetDecisionBadge, BetDecisionPanel } from './BetDecisionPanel'
 
 interface SportsStripProps {
   angles: SportsAngle[]
@@ -36,6 +37,11 @@ export function SportsStrip({ angles }: SportsStripProps) {
                 </p>
                 <h3 className="mt-1 text-[15px] font-semibold text-research-ink">{angle.title}</h3>
                 <p className="mt-0.5 text-sm text-research-muted">{angle.matchup}</p>
+                {angle.bet_decision && (
+                  <div className="mt-2">
+                    <BetDecisionBadge decision={angle.bet_decision} />
+                  </div>
+                )}
                 {!open && (
                   <p className="mt-2 line-clamp-2 text-sm text-research-muted">{angle.narrative}</p>
                 )}
@@ -45,6 +51,7 @@ export function SportsStrip({ angles }: SportsStripProps) {
 
             {open && (
               <div className="animate-fade-up space-y-3 px-1 pb-5">
+                {angle.bet_decision && <BetDecisionPanel decision={angle.bet_decision} />}
                 {angle.why_now && (
                   <p className="text-sm text-research-muted">
                     <span className="font-semibold text-research-ink">Why now · </span>

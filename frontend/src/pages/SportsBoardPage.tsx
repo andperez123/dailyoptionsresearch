@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { getSports } from '../api'
 import type { SportsBoardResponse, SportsGameCard } from '../types'
 import { formatTime } from '../lib/format'
+import { BetDecisionBadge, BetDecisionPanel } from '../components/BetDecisionPanel'
 
 type SortMode = 'relevance' | 'soonest'
 
@@ -26,6 +27,11 @@ function GameRow({ game }: { game: SportsGameCard }) {
           <p className="mt-0.5 text-sm text-research-muted">
             {new Date(game.commence_time).toLocaleString()}
           </p>
+          {game.bet_decision && (
+            <div className="mt-2">
+              <BetDecisionBadge decision={game.bet_decision} />
+            </div>
+          )}
           {game.line_movement && (
             <p className="mt-2 text-xs font-medium text-research-blue">Line moved</p>
           )}
@@ -40,6 +46,8 @@ function GameRow({ game }: { game: SportsGameCard }) {
 
       {open && (
         <div className="animate-fade-up space-y-4 px-1 pb-5">
+          {game.bet_decision && <BetDecisionPanel decision={game.bet_decision} />}
+
           <div className="space-y-2">
             {game.lines.slice(0, 4).map((line) => (
               <div
@@ -173,7 +181,7 @@ export function SportsBoardPage() {
         <div>
           <h1 className="text-3xl font-semibold tracking-tight">Sports</h1>
           <p className="mt-1 text-sm text-research-muted">
-            Observations only · Updated {formatTime(board.data_timestamp)}
+            Decisions within {board.bet_horizon_days} days · Updated {formatTime(board.data_timestamp)}
             {board.quota_remaining != null ? ` · ${board.quota_remaining} left` : ''}
           </p>
         </div>
@@ -200,6 +208,27 @@ export function SportsBoardPage() {
           </select>
         </div>
       </div>
+
+      {board.best_bets.length > 0 && (
+        <section className="mb-8">
+          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-research-muted">
+            Best bets · next {board.bet_horizon_days} days
+          </h2>
+          <div className="space-y-3">
+            {board.best_bets.map((bet) => (
+              <div key={`${bet.event_key}-${bet.market}-${bet.selection}`}>
+                <p className="mb-1.5 text-sm font-semibold text-research-ink">
+                  {bet.matchup}
+                  <span className="ml-2 text-xs font-normal text-research-muted">
+                    {bet.sport_title} · {new Date(bet.commence_time).toLocaleString()}
+                  </span>
+                </p>
+                <BetDecisionPanel decision={bet} />
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       {board.featured_competitions.length > 0 && (
         <div className="mb-5 flex flex-wrap gap-2">

@@ -55,7 +55,7 @@ Open http://127.0.0.1:8000
 | `GET /api/pulse` | SPY/QQQ/VIX + sectors, market status, data freshness |
 | `GET /api/calendar` | Upcoming earnings/events |
 | `GET /api/deepdive/{ticker}` | Ticker analysis (15min cache) |
-| `GET /api/sports` | Sports board with odds + line movement |
+| `GET /api/sports` | Sports board with odds, line movement + bet decisions (3-day horizon) |
 | `POST /api/catalysts/{id}/feedback` | Label signal quality (useful/noise/etc) |
 | `GET /api/briefing/latest` | Daily narrative briefing |
 | `POST /api/research/run` | Trigger briefing |

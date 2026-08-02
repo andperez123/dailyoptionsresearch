@@ -60,6 +60,36 @@ export interface Narrative {
   research_quality?: ResearchQuality
 }
 
+export interface SportsBetDecision {
+  event_key: string
+  sport_key: string
+  sport_title: string
+  home_team: string
+  away_team: string
+  matchup: string
+  commence_time: string
+  market: string
+  market_label: string
+  selection: string
+  point: number | null
+  best_price: number
+  best_bookmaker: string
+  consensus_probability: number
+  implied_probability: number
+  edge_pct: number
+  ev_pct: number
+  kelly_fraction: number
+  stake_units: number
+  decision: 'bet' | 'lean' | 'pass'
+  confidence: number
+  rationale: string
+  key_factors: string[]
+  risks: string[]
+  research_checklist: string[]
+  line_movement_note: string | null
+  news_support_count: number
+}
+
 export interface SportsAngle {
   title: string
   sport: string
@@ -73,6 +103,7 @@ export interface SportsAngle {
   source_event_key?: string
   degen_score: number
   sources: SourceLink[]
+  bet_decision?: SportsBetDecision | null
 }
 
 export interface RadarItem {
@@ -269,6 +300,7 @@ export interface SportsGameCard {
   is_live_window: boolean
   news_context: SportsNewsContext[]
   ai_context: string | null
+  bet_decision: SportsBetDecision | null
   data_timestamp: string
 }
 
@@ -281,6 +313,8 @@ export interface SportsBoardResponse {
   active_sports_count: number
   quota_remaining: number | null
   quota_used: number | null
+  best_bets: SportsBetDecision[]
+  bet_horizon_days: number
 }
 
 export interface ResearchStatus {

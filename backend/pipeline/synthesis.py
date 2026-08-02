@@ -8,12 +8,13 @@ from typing import Any
 from openai import AsyncOpenAI
 
 from config import settings
-from models import BriefingContent, SourceLink, SportsAngle
+from models import BriefingContent, SourceLink, SportsAngle, SportsBetDecision
 from pipeline.news import NewsItem
 from pipeline.odds import SportsEvent
 from pipeline.options import OptionsSnapshot
 from pipeline.reddit import RedditPost
 from pipeline.research import build_ticker_dossiers, validate_narratives
+from pipeline.sports_strategies import BetDecision, decision_to_dict
 
 logger = logging.getLogger(__name__)
 
@@ -170,8 +171,21 @@ def build_sports_research_packet(
     sports_posts: list[RedditPost],
     odds: list[SportsEvent],
     sports_news: list[dict[str, Any]] | None = None,
+    bet_decisions: list[BetDecision] | None = None,
 ) -> dict[str, Any]:
     return {
+        "bet_decision_contract": {
+            "horizon_days": settings.sports_bet_horizon_days,
+            "rules": [
+                "engine_bet_decisions are deterministic picks from cross-book pricing "
+                "(vig-removed consensus vs best available price).",
+                "Sports angles MUST be built around engine_bet_decisions when present — "
+                "lead with the pick, then the story behind it.",
+                "Never invent odds, edges, or picks not present in engine_bet_decisions "
+                "or ranked_odds_events.",
+            ],
+        },
+        "engine_bet_decisions": [decision_to_dict(d) for d in (bet_decisions or [])[:10]],
         "sports_reddit": _serialize_posts(sports_posts),
         "ranked_odds_events": _serialize_odds(odds),
         "matched_news": sports_news or [],
@@ -194,6 +208,10 @@ Hard rules:
 - Explain edge: why that structure makes money vs a simple call/put.
 - Do NOT invent matchups, odds, injuries, or public-vs-sharp claims.
 - Sports angles must reference a matchup present in RANKED ODDS EVENTS.
+- When engine_bet_decisions exist, build sports angles around those picks first:
+  state the decision (selection, market, price, stake) in line_note, then narrate
+  the supporting story and what would confirm or invalidate the number.
+  Take a stance — the reader wants a decision, not a survey.
 - why_now must use today's fresh packet data (age within research_contract max hours).
 - Degen score 1 = conservative, 5 = speculative. Include risk framing.
 - This is entertainment/research, not financial advice.
@@ -300,12 +318,19 @@ def validate_sports_angles(
     angles: list[dict[str, Any]],
     odds: list[SportsEvent],
     sports_posts: list[RedditPost],
+    bet_decisions: list[BetDecision] | None = None,
 ) -> list[SportsAngle]:
     odds_index: dict[str, SportsEvent] = {}
     for event in odds:
         odds_index[_normalize_matchup(f"{event.away_team} @ {event.home_team}")] = event
         if event.event_id:
             odds_index[event.event_id] = event
+
+    decision_index: dict[str, BetDecision] = {}
+    for decision in bet_decisions or []:
+        if decision.event_key:
+            decision_index[decision.event_key] = decision
+        decision_index[_normalize_matchup(decision.matchup)] = decision
 
     post_urls = {p.url for p in sports_posts if p.url}
     validated: list[SportsAngle] = []
@@ -339,6 +364,15 @@ def validate_sports_angles(
         if not any(source.url in post_urls or source.source_type in {"news", "odds", "web"} for source in sources):
             pass
 
+        matched_decision = decision_index.get(event.event_id) or decision_index.get(
+            _normalize_matchup(f"{event.away_team} @ {event.home_team}")
+        )
+        bet_decision = (
+            SportsBetDecision.model_validate(decision_to_dict(matched_decision))
+            if matched_decision
+            else None
+        )
+
         validated.append(
             SportsAngle(
                 title=raw.get("title", f"{event.sport_title} angle"),
@@ -353,6 +387,7 @@ def validate_sports_angles(
                 invalidation_points=raw.get("invalidation_points", []),
                 degen_score=int(raw.get("degen_score", 3)),
                 sources=sources,
+                bet_decision=bet_decision,
             )
         )
     return validated
@@ -496,6 +531,7 @@ async def synthesize_briefing(
     overnight_catalysts: list[dict] | None = None,
     macro_context: list[dict[str, Any]] | None = None,
     sports_news: list[dict[str, Any]] | None = None,
+    sports_bet_decisions: list[BetDecision] | None = None,
 ) -> BriefingContent:
     if not settings.openai_api_key:
         raise ValueError("OPENAI_API_KEY is not configured")
@@ -523,14 +559,18 @@ async def synthesize_briefing(
         macro_context,
         ticker_dossiers=dossiers,
     )
-    sports_packet = build_sports_research_packet(sports_posts, odds, sports_news)
+    sports_packet = build_sports_research_packet(
+        sports_posts, odds, sports_news, bet_decisions=sports_bet_decisions
+    )
     user_prompt = build_user_prompt(stock_packet, sports_packet)
 
     client = AsyncOpenAI(api_key=settings.openai_api_key)
     raw, citations, api_mode = await _generate_briefing_json(client, user_prompt)
     data = _parse_model_json(raw)
 
-    sports_angles = validate_sports_angles(data.get("sports_angles", []), odds, sports_posts)
+    sports_angles = validate_sports_angles(
+        data.get("sports_angles", []), odds, sports_posts, bet_decisions=sports_bet_decisions
+    )
     data["sports_angles"] = [angle.model_dump(mode="json") for angle in sports_angles]
 
     for narrative in data.get("narratives", []):
@@ -596,6 +636,7 @@ async def synthesize_briefing(
         "news_items_collected": len(news),
         "options_snapshots": len(options),
         "sports_events": len(odds),
+        "sports_bet_decisions": len(sports_bet_decisions or []),
         "overnight_catalysts": len(overnight_catalysts or []),
         "web_citations": len(citations),
         "ticker_dossiers": len(dossiers),

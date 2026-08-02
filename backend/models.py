@@ -58,6 +58,38 @@ class Narrative(BaseModel):
     research_quality: dict[str, Any] = Field(default_factory=dict)
 
 
+class SportsBetDecision(BaseModel):
+    """Concrete bet decision from the deterministic sports engine."""
+
+    event_key: str = ""
+    sport_key: str = ""
+    sport_title: str = ""
+    home_team: str = ""
+    away_team: str = ""
+    matchup: str = ""
+    commence_time: str = ""
+    market: str = ""
+    market_label: str = ""
+    selection: str = ""
+    point: Optional[float] = None
+    best_price: float = 0.0
+    best_bookmaker: str = ""
+    consensus_probability: float = 0.0
+    implied_probability: float = 0.0
+    edge_pct: float = 0.0
+    ev_pct: float = 0.0
+    kelly_fraction: float = 0.0
+    stake_units: float = 0.0
+    decision: str = "pass"
+    confidence: float = 0.0
+    rationale: str = ""
+    key_factors: list[str] = Field(default_factory=list)
+    risks: list[str] = Field(default_factory=list)
+    research_checklist: list[str] = Field(default_factory=list)
+    line_movement_note: Optional[str] = None
+    news_support_count: int = 0
+
+
 class SportsAngle(BaseModel):
     model_config = {"extra": "ignore"}
 
@@ -73,6 +105,7 @@ class SportsAngle(BaseModel):
     source_event_key: str = ""
     degen_score: int = Field(ge=1, le=5)
     sources: list[SourceLink] = Field(default_factory=list)
+    bet_decision: Optional[SportsBetDecision] = None
 
 
 class RadarItem(BaseModel):
@@ -257,6 +290,7 @@ class SportsGameCard(BaseModel):
     is_live_window: bool = False
     news_context: list[SportsNewsContext] = Field(default_factory=list)
     ai_context: Optional[str] = None
+    bet_decision: Optional[SportsBetDecision] = None
     data_timestamp: datetime
 
 
@@ -269,6 +303,8 @@ class SportsBoardResponse(BaseModel):
     active_sports_count: int = 0
     quota_remaining: Optional[int] = None
     quota_used: Optional[int] = None
+    best_bets: list[SportsBetDecision] = Field(default_factory=list)
+    bet_horizon_days: int = 3
 
 
 class CatalystFeedbackRequest(BaseModel):
