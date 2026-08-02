@@ -1,25 +1,44 @@
 import { useCallback, useEffect, useState } from 'react'
-import { getLatestBriefing, getStatus, getWire, runResearch } from '../api'
+import {
+  getLatestBriefing,
+  getLatestRunReport,
+  getStatus,
+  getThreads,
+  getWire,
+  runResearch,
+} from '../api'
 import { CatalystCalendarStrip } from '../components/CatalystCalendarStrip'
 import { CatalystWire } from '../components/CatalystWire'
 import { DeepDiveDrawer } from '../components/DeepDiveDrawer'
 import { NarrativeCard } from '../components/NarrativeCard'
 import { RadarSidebar } from '../components/RadarSidebar'
+import { RunReportPanel } from '../components/RunReportPanel'
 import { SportsStrip } from '../components/SportsStrip'
-import type { BriefingRecord, ResearchStatus, ScoredCatalyst } from '../types'
+import { ThreadsPanel } from '../components/ThreadsPanel'
+import type {
+  BriefingRecord,
+  NarrativeThread,
+  ResearchStatus,
+  RunReportRecord,
+  ScoredCatalyst,
+} from '../types'
 
-type Tab = 'themes' | 'signals' | 'watch'
+type Tab = 'themes' | 'threads' | 'signals' | 'watch' | 'analysis'
 
 const tabs: { id: Tab; label: string }[] = [
   { id: 'themes', label: 'Themes' },
+  { id: 'threads', label: 'Threads' },
   { id: 'signals', label: 'Signals' },
   { id: 'watch', label: 'Watch' },
+  { id: 'analysis', label: 'Analysis' },
 ]
 
 export function TodayPage() {
   const [briefing, setBriefing] = useState<BriefingRecord | null>(null)
   const [status, setStatus] = useState<ResearchStatus | null>(null)
   const [alerts, setAlerts] = useState<ScoredCatalyst[]>([])
+  const [runReport, setRunReport] = useState<RunReportRecord | null>(null)
+  const [threads, setThreads] = useState<NarrativeThread[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [selectedTicker, setSelectedTicker] = useState<string | null>(null)
@@ -27,14 +46,18 @@ export function TodayPage() {
 
   const load = useCallback(async (signal?: AbortSignal) => {
     try {
-      const [b, s, wire] = await Promise.all([
+      const [b, s, wire, report, threadList] = await Promise.all([
         getLatestBriefing(signal),
         getStatus(signal),
         getWire({ page: 1, page_size: 6, min_impact: 8, min_confidence: 5 }, signal),
+        getLatestRunReport(signal).catch(() => null),
+        getThreads(undefined, signal).catch(() => [] as NarrativeThread[]),
       ])
       setBriefing(b)
       setStatus(s)
       setAlerts(wire.items)
+      setRunReport(report)
+      setThreads(threadList)
       setError(null)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load research')
@@ -147,12 +170,37 @@ export function TodayPage() {
             <>
               <section className="rounded-2xl bg-research-surface px-4 shadow-soft sm:px-5">
                 {briefing.content.narratives.length === 0 ? (
-                  <p className="py-10 text-center text-sm text-research-muted">
-                    No themes in this briefing.
-                  </p>
+                  <div className="px-2 py-10 text-center">
+                    <p className="text-sm text-research-muted">
+                      No themes in this briefing.
+                    </p>
+                    {runReport && (
+                      <>
+                        <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-research-ink">
+                          {runReport.headline}
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => setTab('analysis')}
+                          className="mt-3 text-sm font-semibold text-research-blue hover:underline"
+                        >
+                          See what the analysis produced →
+                        </button>
+                      </>
+                    )}
+                  </div>
                 ) : (
                   briefing.content.narratives.map((n) => (
-                    <NarrativeCard key={`${n.title}-${n.tickers.join('-')}`} narrative={n} />
+                    <NarrativeCard
+                      key={`${n.title}-${n.tickers.join('-')}`}
+                      narrative={n}
+                      threadDay={Math.max(
+                        0,
+                        ...threads
+                          .filter((t) => n.tickers.includes(t.ticker))
+                          .map((t) => t.days_tracked),
+                      )}
+                    />
                   ))
                 )}
               </section>
@@ -165,6 +213,18 @@ export function TodayPage() {
               )}
             </>
           )}
+        </div>
+      )}
+
+      {tab === 'threads' && (
+        <div className="animate-fade-up">
+          <ThreadsPanel threads={threads} onTickerClick={setSelectedTicker} />
+        </div>
+      )}
+
+      {tab === 'analysis' && (
+        <div className="animate-fade-up">
+          <RunReportPanel report={runReport} onTickerClick={setSelectedTicker} />
         </div>
       )}
 

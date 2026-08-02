@@ -344,14 +344,61 @@ def _play_is_weak(play: dict[str, Any], snapshot: OptionsSnapshot | None) -> boo
     return not _legs_match_chain(play, snapshot)
 
 
+def dossier_verdicts(dossiers: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Compact per-ticker pass/fail summary for the run report, with a
+    human-readable reason when a ticker failed the multi-source bar."""
+    verdicts: list[dict[str, Any]] = []
+    for d in dossiers:
+        quality = d.get("research_quality") or {}
+        meets = bool(quality.get("meets_multi_source_bar"))
+        news_domains = quality.get("news_domain_count", 0)
+        independent = quality.get("independent_source_count", 0)
+        source_types = quality.get("source_types") or []
+        if meets:
+            reason = ""
+        elif not d.get("sources"):
+            reason = "No sources found (no fresh news, Reddit posts, or catalysts)"
+        elif news_domains == 0:
+            reason = (
+                "Only Reddit/catalyst chatter — no independent news domain within "
+                f"{quality.get('max_age_hours_applied', '?')}h"
+                if source_types
+                else "No fresh news within the freshness window"
+            )
+        else:
+            reason = (
+                f"Only {independent} independent source(s); "
+                f"{settings.min_independent_sources} required"
+            )
+        verdicts.append(
+            {
+                "ticker": d["ticker"],
+                "mention_count": d.get("mention_count", 0),
+                "buzz_delta": d.get("buzz_delta", 0.0),
+                "source_count": len(d.get("sources") or []),
+                "independent_source_count": independent,
+                "news_domain_count": news_domains,
+                "source_types": source_types,
+                "corroborated_claim_count": quality.get("corroborated_claim_count", 0),
+                "newest_source_age_hours": quality.get("newest_source_age_hours"),
+                "strategy_candidates": len(d.get("strategy_candidates") or []),
+                "meets_multi_source_bar": meets,
+                "fail_reason": reason,
+            }
+        )
+    return verdicts
+
+
 def validate_narratives(
     narratives: list[dict[str, Any]],
     dossiers: list[dict[str, Any]],
     *,
     require_multi_source: bool | None = None,
     options: list[OptionsSnapshot] | None = None,
-) -> list[dict[str, Any]]:
-    """Attach research_quality, prefer multi-source, drop single-source weak theses."""
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Attach research_quality, prefer multi-source, drop single-source weak
+    theses. Returns (kept, dropped) where each dropped entry records the
+    title, tickers, and the reason it was rejected."""
     hard_gate = (
         settings.require_multi_source_narratives
         if require_multi_source is None
@@ -360,6 +407,16 @@ def validate_narratives(
     dossier_by_ticker = {d["ticker"]: d for d in dossiers}
     snapshot_by_ticker = {o.ticker.upper(): o for o in options or []}
     validated: list[dict[str, Any]] = []
+    dropped: list[dict[str, Any]] = []
+
+    def _drop(raw: dict[str, Any], reason: str) -> None:
+        dropped.append(
+            {
+                "title": raw.get("title", ""),
+                "tickers": [str(t).upper() for t in raw.get("tickers") or []],
+                "reason": reason,
+            }
+        )
 
     for raw in narratives:
         tickers = [str(t).upper() for t in raw.get("tickers") or []]
@@ -371,6 +428,7 @@ def validate_narratives(
                 "warning": "No matching research dossier for tickers",
             }
             if hard_gate:
+                _drop(raw, "No research dossier for its tickers — thesis has no packet support")
                 continue
             validated.append(raw)
             continue
@@ -441,8 +499,14 @@ def validate_narratives(
             raw["options_plays"] = kept_plays[:3]
 
         if hard_gate and not meets:
+            _drop(
+                raw,
+                f"Failed multi-source bar: {independent} independent source(s), "
+                f"{len(news_domains)} news domain(s); need "
+                f"{settings.min_independent_sources}+ sources incl. 1 news domain",
+            )
             continue
 
         validated.append(raw)
 
-    return validated
+    return validated, dropped

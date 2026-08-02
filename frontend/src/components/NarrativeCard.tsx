@@ -4,6 +4,7 @@ import { DegenScore } from './DegenScore'
 
 interface NarrativeCardProps {
   narrative: Narrative
+  threadDay?: number
 }
 
 function formatStrategy(play: OptionsPlay): string {
@@ -13,10 +14,11 @@ function formatStrategy(play: OptionsPlay): string {
   return play.direction
 }
 
-export function NarrativeCard({ narrative }: NarrativeCardProps) {
+export function NarrativeCard({ narrative, threadDay }: NarrativeCardProps) {
   const [open, setOpen] = useState(false)
   const quality = narrative.research_quality
   const multiSource = quality?.meets_multi_source_bar
+  const threadStatus = narrative.thread_update?.status
 
   return (
     <article className="border-b border-research-line last:border-b-0">
@@ -50,6 +52,12 @@ export function NarrativeCard({ narrative }: NarrativeCardProps) {
                     : 'forming'}
               </span>
             )}
+            {(threadDay ?? 0) > 1 && (
+              <span className="rounded-full bg-research-blue-soft px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-research-blue">
+                Day {threadDay}
+                {threadStatus && threadStatus !== 'new' ? ` · ${threadStatus}` : ''}
+              </span>
+            )}
           </div>
           <h3 className="text-lg font-semibold tracking-tight text-research-ink">{narrative.title}</h3>
           {!open && (
@@ -79,6 +87,13 @@ export function NarrativeCard({ narrative }: NarrativeCardProps) {
             <span className="font-semibold text-research-ink">Why now · </span>
             {narrative.why_now}
           </p>
+
+          {narrative.thread_update?.what_changed && (
+            <p className="max-w-2xl text-sm leading-6 text-research-muted">
+              <span className="font-semibold text-research-ink">Since last update · </span>
+              {narrative.thread_update.what_changed}
+            </p>
+          )}
 
           {narrative.priced_in && (
             <p className="max-w-2xl text-sm leading-6 text-research-muted">

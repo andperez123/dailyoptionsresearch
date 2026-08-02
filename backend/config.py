@@ -47,6 +47,10 @@ class Settings(BaseSettings):
     briefing_news_max_age_hours: int = 24
     min_independent_sources: int = 2
     require_multi_source_narratives: bool = True
+    # Narrative threads: days without a fresh narrative before a thread goes stale,
+    # and how many active-thread tickers get force-included in the watchlist.
+    thread_stale_days: int = 5
+    thread_max_tracked: int = 10
     odds_dynamic_discovery: bool = True
     odds_regions: str = "us"
     odds_max_sports_per_scan: int = 8

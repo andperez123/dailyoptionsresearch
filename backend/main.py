@@ -18,11 +18,16 @@ from database import (
     get_deep_dive_cache,
     get_latest_briefing,
     get_latest_market_snapshots,
+    get_latest_run_report,
     get_pipeline_state,
     get_catalyst_by_id,
+    get_run_report_by_date,
+    get_thread_by_ticker,
     init_db,
     list_briefings,
     list_calendar_events,
+    list_narrative_threads,
+    list_run_reports,
     list_sports_bet_decisions,
     list_wire_catalysts,
     save_catalyst_feedback,
@@ -34,8 +39,11 @@ from models import (
     CatalystFeedbackRecord,
     CatalystFeedbackRequest,
     DeepDiveResponse,
+    NarrativeThread,
     PulseResponse,
     ResearchStatus,
+    RunReportRecord,
+    RunReportSummary,
     SportsBetRecordEntry,
     SportsBetRecordResponse,
     SportsBoardResponse,
@@ -147,6 +155,37 @@ async def trigger_research(background_tasks: BackgroundTasks):
         return ResearchStatus(running=True, message="Research already in progress")
     background_tasks.add_task(_run_pipeline_job)
     return ResearchStatus(running=True, message="Research started")
+
+
+@app.get("/api/runs", response_model=list[RunReportSummary])
+async def runs(limit: int = Query(30, ge=1, le=100)):
+    return await list_run_reports(limit=limit)
+
+
+@app.get("/api/runs/latest", response_model=Optional[RunReportRecord])
+async def latest_run_report():
+    return await get_latest_run_report()
+
+
+@app.get("/api/runs/{run_date}", response_model=RunReportRecord)
+async def run_report_by_date(run_date: date):
+    record = await get_run_report_by_date(run_date)
+    if not record:
+        raise HTTPException(status_code=404, detail="No run report for date")
+    return record
+
+
+@app.get("/api/threads", response_model=list[NarrativeThread])
+async def narrative_threads(status: Optional[str] = Query(default=None)):
+    return await list_narrative_threads(status=status)
+
+
+@app.get("/api/threads/{ticker}", response_model=NarrativeThread)
+async def narrative_thread(ticker: str):
+    thread = await get_thread_by_ticker(ticker)
+    if not thread:
+        raise HTTPException(status_code=404, detail="No thread for ticker")
+    return thread
 
 
 @app.get("/api/wire", response_model=WireResponse)

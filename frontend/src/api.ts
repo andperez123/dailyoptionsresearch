@@ -4,8 +4,11 @@ import type {
   CalendarEvent,
   CatalystFeedbackRecord,
   DeepDiveResponse,
+  NarrativeThread,
   PulseResponse,
   ResearchStatus,
+  RunReportRecord,
+  RunReportSummary,
   SportsBetRecordResponse,
   SportsBoardResponse,
   WireResponse,
@@ -108,6 +111,27 @@ export function getSportsRecord(signal?: AbortSignal, limit = 100): Promise<Spor
 
 export function runCatalystScan(): Promise<{ status: string }> {
   return fetchJson<{ status: string }>('/catalyst/scan', { method: 'POST' })
+}
+
+export function listRunReports(limit = 30, signal?: AbortSignal): Promise<RunReportSummary[]> {
+  return fetchJson<RunReportSummary[]>(`/runs?limit=${limit}`, { signal })
+}
+
+export function getLatestRunReport(signal?: AbortSignal): Promise<RunReportRecord | null> {
+  return fetchJson<RunReportRecord | null>('/runs/latest', { signal })
+}
+
+export function getRunReportByDate(date: string, signal?: AbortSignal): Promise<RunReportRecord> {
+  return fetchJson<RunReportRecord>(`/runs/${date}`, { signal })
+}
+
+export function getThreads(status?: string, signal?: AbortSignal): Promise<NarrativeThread[]> {
+  const qs = status ? `?status=${encodeURIComponent(status)}` : ''
+  return fetchJson<NarrativeThread[]>(`/threads${qs}`, { signal })
+}
+
+export function getThreadByTicker(ticker: string, signal?: AbortSignal): Promise<NarrativeThread> {
+  return fetchJson<NarrativeThread>(`/threads/${ticker}`, { signal })
 }
 
 export function postCatalystFeedback(

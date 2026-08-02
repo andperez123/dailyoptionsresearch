@@ -14,7 +14,8 @@ from pipeline.news import NewsItem
 from pipeline.odds import SportsEvent
 from pipeline.options import OptionsSnapshot
 from pipeline.reddit import RedditPost
-from pipeline.research import build_ticker_dossiers, validate_narratives
+from pipeline.report import RunReportBuilder
+from pipeline.research import build_ticker_dossiers, dossier_verdicts, validate_narratives
 from pipeline.sports_strategies import BetDecision, decision_to_dict
 
 logger = logging.getLogger(__name__)
@@ -154,6 +155,34 @@ def _serialize_odds(events: list[SportsEvent], limit: int = 12) -> list[dict]:
     ]
 
 
+def serialize_threads(threads: list[Any]) -> list[dict[str, Any]]:
+    """Compact ongoing-narrative context for the LLM: the current thesis plus
+    the last few dated updates so the model can continue the storyline."""
+    serialized: list[dict[str, Any]] = []
+    for thread in threads:
+        serialized.append(
+            {
+                "ticker": thread.ticker,
+                "title": thread.title,
+                "status": thread.status,
+                "direction": thread.direction,
+                "conviction": thread.conviction,
+                "current_thesis": thread.thesis,
+                "started": thread.created_date.isoformat(),
+                "days_tracked": thread.days_tracked,
+                "recent_updates": [
+                    {
+                        "date": u.update_date.isoformat(),
+                        "type": u.update_type,
+                        "note": u.note[:300],
+                    }
+                    for u in thread.updates[:5]
+                ],
+            }
+        )
+    return serialized
+
+
 def build_stock_research_packet(
     finance_posts: list[RedditPost],
     news: list[NewsItem],
@@ -163,6 +192,7 @@ def build_stock_research_packet(
     overnight_catalysts: list[dict] | None,
     macro_context: list[dict[str, Any]] | None = None,
     ticker_dossiers: list[dict[str, Any]] | None = None,
+    ongoing_narratives: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     return {
         "research_contract": {
@@ -174,8 +204,14 @@ def build_stock_research_packet(
                 "Insight must synthesize across sources — never rewrite a single headline.",
                 "Prefer strategy_candidates from dossiers over naked long calls/puts.",
                 "Use only recent packet data for 'why now'; flag stale claims.",
+                "ongoing_narratives are theses from previous days you are tracking. "
+                "When today's evidence touches one, continue that storyline: say what "
+                "changed since the last update and set thread_update accordingly. "
+                "If evidence contradicts an ongoing thesis, say so (weakening/resolved) "
+                "rather than ignoring it.",
             ],
         },
+        "ongoing_narratives": ongoing_narratives or [],
         "ticker_dossiers": ticker_dossiers or [],
         "overnight_catalysts": overnight_catalysts or [],
         "ticker_mentions": dict(list(ticker_counts.items())[:20]),
@@ -234,6 +270,11 @@ Hard rules:
   Take a stance — the reader wants a decision, not a survey.
 - why_now must use today's fresh packet data (age within research_contract max hours).
 - Degen score 1 = conservative, 5 = speculative. Include risk framing.
+- ongoing_narratives are storylines tracked from previous days. When a narrative
+  continues one, populate thread_update with status
+  (continuing|strengthening|weakening|resolved) and what_changed since the last
+  update. Brand-new theses use status "new". Never silently drop a tracked
+  storyline that today's evidence contradicts — mark it weakening or resolved.
 - This is entertainment/research, not financial advice.
 """
 
@@ -270,6 +311,7 @@ Return JSON with this exact structure:
       "catalysts": ["date or event"],
       "confirmation_points": ["what would strengthen the thesis"],
       "invalidation_points": ["what would break the thesis"],
+      "thread_update": {{"status": "new|continuing|strengthening|weakening|resolved", "what_changed": "one sentence on what moved since the last update (empty for new theses)"}},
       "degen_score": 1-5,
       "options_plays": [
         {{
@@ -556,6 +598,9 @@ async def synthesize_briefing(
     sports_news: list[dict[str, Any]] | None = None,
     sports_bet_decisions: list[BetDecision] | None = None,
     top_tickers: list[str] | None = None,
+    dossiers: list[dict[str, Any]] | None = None,
+    ongoing_narratives: list[dict[str, Any]] | None = None,
+    report: RunReportBuilder | None = None,
 ) -> BriefingContent:
     if not settings.openai_api_key:
         raise ValueError("OPENAI_API_KEY is not configured")
@@ -563,17 +608,20 @@ async def synthesize_briefing(
     # Prefer the caller's universe-validated watchlist; fall back to raw counts
     if top_tickers is None:
         top_tickers = select_top_tickers(ticker_counts)
-    dossiers = build_ticker_dossiers(
-        tickers=top_tickers,
-        news=news,
-        finance_posts=finance_posts,
-        options=options,
-        overnight_catalysts=overnight_catalysts or [],
-        ticker_counts=ticker_counts,
-        buzz_deltas=buzz_deltas,
-        macro_context=macro_context,
-        max_age_hours=settings.briefing_news_max_age_hours,
-    )
+    if dossiers is None:
+        dossiers = build_ticker_dossiers(
+            tickers=top_tickers,
+            news=news,
+            finance_posts=finance_posts,
+            options=options,
+            overnight_catalysts=overnight_catalysts or [],
+            ticker_counts=ticker_counts,
+            buzz_deltas=buzz_deltas,
+            macro_context=macro_context,
+            max_age_hours=settings.briefing_news_max_age_hours,
+        )
+    if report is not None:
+        report.set("dossier_verdicts", dossier_verdicts(dossiers))
 
     stock_packet = build_stock_research_packet(
         finance_posts,
@@ -584,6 +632,7 @@ async def synthesize_briefing(
         overnight_catalysts,
         macro_context,
         ticker_dossiers=dossiers,
+        ongoing_narratives=ongoing_narratives,
     )
     sports_packet = build_sports_research_packet(
         sports_posts, odds, sports_news, bet_decisions=sports_bet_decisions
@@ -609,15 +658,17 @@ async def synthesize_briefing(
 
     before_count = len(data.get("narratives") or [])
     raw_narratives = data.get("narratives") or []
-    data["narratives"] = validate_narratives(
+    data["narratives"], dropped_reasons = validate_narratives(
         raw_narratives,
         dossiers,
         require_multi_source=settings.require_multi_source_narratives,
         options=options,
     )
+    low_confidence_fallback = False
     if not data["narratives"] and raw_narratives and settings.require_multi_source_narratives:
         # Thin corroboration day — keep narratives but mark low confidence
-        data["narratives"] = validate_narratives(
+        low_confidence_fallback = True
+        data["narratives"], _ = validate_narratives(
             raw_narratives, dossiers, require_multi_source=False, options=options
         )
         for narrative in data["narratives"]:
@@ -625,6 +676,19 @@ async def synthesize_briefing(
             rq["warning"] = "Multi-source bar not met — thesis marked low confidence"
             rq["meets_multi_source_bar"] = False
     dropped = before_count - len(data["narratives"])
+    if report is not None:
+        report.set("raw_narrative_count", before_count)
+        report.set("validated_narrative_count", len(data["narratives"]))
+        report.set("narratives_dropped", dropped_reasons if not low_confidence_fallback else [])
+        report.set("low_confidence_fallback", low_confidence_fallback)
+        report.set("llm_api_mode", api_mode)
+        report.set("web_citations", len(citations))
+        if low_confidence_fallback:
+            report.set(
+                "fallback_note",
+                "All model theses failed the multi-source bar; kept as low-confidence "
+                "instead of dropping the briefing entirely",
+            )
 
     # Auto-radar for strong-buzz tickers that failed the multi-source bar
     radar = list(data.get("radar") or [])

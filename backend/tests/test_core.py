@@ -487,14 +487,17 @@ def test_validate_narratives_drops_single_source_when_required() -> None:
             ],
         }
     ]
-    kept = validate_narratives(
+    kept, dropped = validate_narratives(
         [{"title": "Weak", "tickers": ["ACME"], "sources": [], "options_plays": [{"direction": "call", "ticker": "ACME", "strike_zone": "calls", "expiry": "weekly", "degen_score": 4}]}],
         dossiers,
         require_multi_source=True,
     )
     assert kept == []
+    assert len(dropped) == 1
+    assert dropped[0]["tickers"] == ["ACME"]
+    assert "multi-source bar" in dropped[0]["reason"]
 
-    soft = validate_narratives(
+    soft, _ = validate_narratives(
         [{"title": "Weak", "tickers": ["ACME"], "sources": [], "options_plays": [{"direction": "call", "ticker": "ACME", "strike_zone": "calls", "expiry": "weekly", "degen_score": 4}]}],
         dossiers,
         require_multi_source=False,
@@ -938,12 +941,50 @@ def test_validate_narratives_replaces_plays_with_offchain_legs() -> None:
             }
         ],
     }
-    kept = validate_narratives(
+    kept, _ = validate_narratives(
         [hallucinated], dossiers, require_multi_source=False, options=[snapshot]
     )
     plays = kept[0]["options_plays"]
     assert plays and plays[0]["strategy_type"] == "debit_call_spread"
     assert plays[0]["structure"] == "Buy 100C / Sell 105C", "off-chain play must be replaced"
+
+
+def test_run_report_builder_headlines() -> None:
+    from datetime import date as date_cls
+
+    from pipeline.report import RunReportBuilder
+
+    # Sunday 2026-08-02 — weekend note should appear on empty days
+    builder = RunReportBuilder(date_cls(2026, 8, 2))
+    builder.stage("reddit_collected", finance_posts=10)
+    builder.set(
+        "dossier_verdicts",
+        [
+            {"ticker": "NVDA", "meets_multi_source_bar": False, "fail_reason": "Only Reddit"},
+            {"ticker": "TSLA", "meets_multi_source_bar": False, "fail_reason": "No sources"},
+        ],
+    )
+    builder.set("narratives_dropped", [{"title": "Weak", "tickers": ["NVDA"], "reason": "bar"}])
+    empty_headline = builder.headline_for("empty", 0)
+    assert empty_headline.startswith("0 narratives")
+    assert "weekend" in empty_headline
+    assert "0/2 dossiers" in empty_headline
+
+    builder.set(
+        "dossier_verdicts",
+        [{"ticker": "NVDA", "meets_multi_source_bar": True, "fail_reason": ""}],
+    )
+    success_headline = builder.headline_for("success", 2)
+    assert "2 narratives" in success_headline
+    assert "NVDA" in success_headline
+
+    failed_headline = builder.headline_for("failed", 0, error="boom")
+    assert "reddit_collected" in failed_headline
+    assert "boom" in failed_headline
+
+    report = builder.build()
+    assert report["stages"][0]["stage"] == "reddit_collected"
+    assert "dossier_verdicts" in report
 
 
 def test_llm_tuning_params_by_model_family() -> None:

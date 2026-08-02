@@ -42,6 +42,11 @@ export interface ResearchQuality {
   dossier_tickers?: string[]
 }
 
+export interface ThreadUpdateInfo {
+  status?: string
+  what_changed?: string
+}
+
 export interface Narrative {
   title: string
   tickers: string[]
@@ -58,6 +63,7 @@ export interface Narrative {
   options_plays: OptionsPlay[]
   sources: SourceLink[]
   research_quality?: ResearchQuality
+  thread_update?: ThreadUpdateInfo
 }
 
 export interface SportsBetDecision {
@@ -370,4 +376,88 @@ export interface ResearchStatus {
   last_run: string | null
   last_error: string | null
   message: string
+}
+
+export interface RunReportSummary {
+  id: number
+  run_date: string
+  started_at: string
+  finished_at: string | null
+  status: 'success' | 'empty' | 'failed' | 'running'
+  headline: string
+  error: string | null
+}
+
+export interface RunStage {
+  stage: string
+  at: string
+  [key: string]: unknown
+}
+
+export interface DossierVerdict {
+  ticker: string
+  mention_count: number
+  buzz_delta: number
+  source_count: number
+  independent_source_count: number
+  news_domain_count: number
+  source_types: string[]
+  corroborated_claim_count: number
+  newest_source_age_hours: number | null
+  strategy_candidates: number
+  meets_multi_source_bar: boolean
+  fail_reason: string
+}
+
+export interface DroppedNarrative {
+  title: string
+  tickers: string[]
+  reason: string
+}
+
+export interface RunReportBody {
+  stages?: RunStage[]
+  dossier_verdicts?: DossierVerdict[]
+  narratives_dropped?: DroppedNarrative[]
+  raw_narrative_count?: number
+  validated_narrative_count?: number
+  low_confidence_fallback?: boolean
+  fallback_note?: string
+  llm_api_mode?: string
+  web_citations?: number
+  summary?: string
+  [key: string]: unknown
+}
+
+export interface RunReportRecord extends RunReportSummary {
+  report: RunReportBody
+}
+
+export interface ThreadUpdate {
+  id: number
+  update_date: string
+  update_type:
+    | 'new'
+    | 'continuing'
+    | 'strengthening'
+    | 'weakening'
+    | 'resolved'
+    | 'no_new_evidence'
+  note: string
+  evidence: Record<string, unknown>
+}
+
+export interface NarrativeThread {
+  id: number
+  ticker: string
+  title: string
+  status: 'active' | 'stale' | 'closed'
+  direction: string
+  conviction: number
+  thesis: string
+  created_date: string
+  last_narrative_date: string | null
+  updated_at: string
+  days_tracked: number
+  updates: ThreadUpdate[]
 }

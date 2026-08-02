@@ -56,6 +56,9 @@ class Narrative(BaseModel):
     options_plays: list[OptionsPlay] = Field(default_factory=list)
     sources: list[SourceLink] = Field(default_factory=list)
     research_quality: dict[str, Any] = Field(default_factory=dict)
+    # Continuity vs prior runs: {"status": "new|continuing|strengthening|weakening|resolved",
+    # "what_changed": "..."} — populated by the model when the thesis extends an ongoing thread.
+    thread_update: dict[str, Any] = Field(default_factory=dict)
 
 
 class SportsBetDecision(BaseModel):
@@ -145,6 +148,56 @@ class ResearchStatus(BaseModel):
     last_run: Optional[datetime] = None
     last_error: Optional[str] = None
     message: str = ""
+
+
+# --- Run reports (per-run diagnostics, saved even when nothing is produced) ---
+
+
+class RunReportRecord(BaseModel):
+    id: int
+    run_date: date
+    started_at: datetime
+    finished_at: Optional[datetime] = None
+    status: str = "running"  # success | empty | failed
+    headline: str = ""
+    error: Optional[str] = None
+    report: dict[str, Any] = Field(default_factory=dict)
+
+
+class RunReportSummary(BaseModel):
+    id: int
+    run_date: date
+    started_at: datetime
+    finished_at: Optional[datetime] = None
+    status: str
+    headline: str
+    error: Optional[str] = None
+
+
+# --- Narrative threads (running per-ticker storylines across daily runs) ---
+
+
+class ThreadUpdate(BaseModel):
+    id: int = 0
+    update_date: date
+    update_type: str = "continuing"  # new | continuing | strengthening | weakening | resolved | no_new_evidence
+    note: str = ""
+    evidence: dict[str, Any] = Field(default_factory=dict)
+
+
+class NarrativeThread(BaseModel):
+    id: int
+    ticker: str
+    title: str
+    status: str = "active"  # active | stale | closed
+    direction: str = ""
+    conviction: int = 3
+    thesis: str = ""
+    created_date: date
+    last_narrative_date: Optional[date] = None
+    updated_at: datetime
+    days_tracked: int = 1
+    updates: list[ThreadUpdate] = Field(default_factory=list)
 
 
 # --- V2 Catalyst Intelligence Models ---

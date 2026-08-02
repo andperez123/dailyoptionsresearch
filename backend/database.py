@@ -16,7 +16,11 @@ from models import (
     CalendarEvent,
     DeepDiveResponse,
     MarketSnapshot,
+    NarrativeThread,
+    RunReportRecord,
+    RunReportSummary,
     ScoredCatalyst,
+    ThreadUpdate,
 )
 from time_utils import parse_datetime, utc_now, utc_now_iso
 
@@ -229,12 +233,34 @@ async def init_db() -> None:
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_scored_catalysts_cluster ON scored_catalysts(cluster_id)"
         )
-        await db.execute(
-            """
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_scored_catalysts_cluster_unique
-            ON scored_catalysts(cluster_id) WHERE cluster_id IS NOT NULL
-            """
-        )
+        # Older DB files can contain duplicate cluster_id rows written before this
+        # unique index existed; creating it then fails and every later
+        # ON CONFLICT(cluster_id) upsert errors with "ON CONFLICT clause does not
+        # match any PRIMARY KEY or UNIQUE constraint". Dedupe (keep newest row per
+        # cluster) before creating the index so old volumes migrate cleanly.
+        try:
+            await db.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_scored_catalysts_cluster_unique
+                ON scored_catalysts(cluster_id) WHERE cluster_id IS NOT NULL
+                """
+            )
+        except aiosqlite.Error:
+            await db.execute(
+                """
+                DELETE FROM scored_catalysts
+                WHERE cluster_id IS NOT NULL AND id NOT IN (
+                    SELECT MAX(id) FROM scored_catalysts
+                    WHERE cluster_id IS NOT NULL GROUP BY cluster_id
+                )
+                """
+            )
+            await db.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_scored_catalysts_cluster_unique
+                ON scored_catalysts(cluster_id) WHERE cluster_id IS NOT NULL
+                """
+            )
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_sports_odds_event ON sports_odds_snapshots(event_key, market, snapshot_at DESC)"
         )
@@ -302,6 +328,53 @@ async def init_db() -> None:
                 error TEXT,
                 created_at TEXT NOT NULL,
                 completed_at TEXT
+            )
+            """
+        )
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS run_reports (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_date TEXT NOT NULL,
+                started_at TEXT NOT NULL,
+                finished_at TEXT,
+                status TEXT NOT NULL DEFAULT 'running',
+                headline TEXT NOT NULL DEFAULT '',
+                error TEXT,
+                report_json TEXT NOT NULL DEFAULT '{}'
+            )
+            """
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_run_reports_date ON run_reports(run_date DESC, started_at DESC)"
+        )
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS narrative_threads (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ticker TEXT NOT NULL UNIQUE,
+                title TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'active',
+                direction TEXT NOT NULL DEFAULT '',
+                conviction INTEGER NOT NULL DEFAULT 3,
+                thesis TEXT NOT NULL DEFAULT '',
+                created_date TEXT NOT NULL,
+                last_narrative_date TEXT,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS thread_updates (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                thread_id INTEGER NOT NULL,
+                update_date TEXT NOT NULL,
+                update_type TEXT NOT NULL DEFAULT 'continuing',
+                note TEXT NOT NULL DEFAULT '',
+                evidence_json TEXT NOT NULL DEFAULT '{}',
+                UNIQUE(thread_id, update_date),
+                FOREIGN KEY(thread_id) REFERENCES narrative_threads(id)
             )
             """
         )
@@ -1180,3 +1253,278 @@ async def cleanup_old_data(days: int = 30) -> None:
             (cutoff, settings.minimum_wire_impact_score),
         )
         await db.commit()
+
+
+# --- Run reports ---
+
+
+def _row_to_run_report(row: aiosqlite.Row, include_body: bool) -> RunReportRecord | RunReportSummary:
+    common = {
+        "id": row["id"],
+        "run_date": date.fromisoformat(row["run_date"]),
+        "started_at": _parse_dt(row["started_at"]),
+        "finished_at": _parse_dt(row["finished_at"]) if row["finished_at"] else None,
+        "status": row["status"],
+        "headline": row["headline"],
+        "error": row["error"],
+    }
+    if include_body:
+        return RunReportRecord(**common, report=json.loads(row["report_json"] or "{}"))
+    return RunReportSummary(**common)
+
+
+async def save_run_report(
+    run_date: date,
+    started_at: datetime,
+    status: str,
+    headline: str,
+    report: dict[str, Any],
+    error: str | None = None,
+) -> int:
+    async with connect_db() as db:
+        cursor = await db.execute(
+            """
+            INSERT INTO run_reports (run_date, started_at, finished_at, status, headline, error, report_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                run_date.isoformat(),
+                started_at.isoformat(),
+                utc_now_iso(),
+                status,
+                headline,
+                error,
+                json.dumps(report, default=str),
+            ),
+        )
+        await db.commit()
+        return cursor.lastrowid or 0
+
+
+async def list_run_reports(limit: int = 30) -> list[RunReportSummary]:
+    async with connect_db() as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """
+            SELECT id, run_date, started_at, finished_at, status, headline, error
+            FROM run_reports ORDER BY started_at DESC LIMIT ?
+            """,
+            (limit,),
+        )
+        rows = await cursor.fetchall()
+        return [_row_to_run_report(row, include_body=False) for row in rows]
+
+
+async def get_latest_run_report() -> RunReportRecord | None:
+    async with connect_db() as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM run_reports ORDER BY started_at DESC LIMIT 1"
+        )
+        row = await cursor.fetchone()
+        return _row_to_run_report(row, include_body=True) if row else None
+
+
+async def get_run_report_by_date(run_date: date) -> RunReportRecord | None:
+    """Latest run report for a given date (the day can have several runs)."""
+    async with connect_db() as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """
+            SELECT * FROM run_reports WHERE run_date = ?
+            ORDER BY started_at DESC LIMIT 1
+            """,
+            (run_date.isoformat(),),
+        )
+        row = await cursor.fetchone()
+        return _row_to_run_report(row, include_body=True) if row else None
+
+
+# --- Narrative threads ---
+
+
+async def _thread_from_row(db: aiosqlite.Connection, row: aiosqlite.Row, updates_limit: int) -> NarrativeThread:
+    cursor = await db.execute(
+        """
+        SELECT id, update_date, update_type, note, evidence_json
+        FROM thread_updates WHERE thread_id = ?
+        ORDER BY update_date DESC LIMIT ?
+        """,
+        (row["id"], updates_limit),
+    )
+    update_rows = await cursor.fetchall()
+    updates = [
+        ThreadUpdate(
+            id=u[0],
+            update_date=date.fromisoformat(u[1]),
+            update_type=u[2],
+            note=u[3] or "",
+            evidence=json.loads(u[4] or "{}"),
+        )
+        for u in update_rows
+    ]
+    created = date.fromisoformat(row["created_date"])
+    last = date.fromisoformat(row["last_narrative_date"]) if row["last_narrative_date"] else created
+    return NarrativeThread(
+        id=row["id"],
+        ticker=row["ticker"],
+        title=row["title"],
+        status=row["status"],
+        direction=row["direction"],
+        conviction=row["conviction"],
+        thesis=row["thesis"],
+        created_date=created,
+        last_narrative_date=(
+            date.fromisoformat(row["last_narrative_date"]) if row["last_narrative_date"] else None
+        ),
+        updated_at=_parse_dt(row["updated_at"]),
+        days_tracked=max((last - created).days + 1, 1),
+        updates=updates,
+    )
+
+
+async def list_narrative_threads(
+    status: str | None = None,
+    updates_limit: int = 30,
+) -> list[NarrativeThread]:
+    async with connect_db() as db:
+        db.row_factory = aiosqlite.Row
+        if status:
+            cursor = await db.execute(
+                "SELECT * FROM narrative_threads WHERE status = ? ORDER BY updated_at DESC",
+                (status,),
+            )
+        else:
+            cursor = await db.execute(
+                """
+                SELECT * FROM narrative_threads
+                ORDER BY CASE status WHEN 'active' THEN 0 WHEN 'stale' THEN 1 ELSE 2 END,
+                         updated_at DESC
+                """
+            )
+        rows = await cursor.fetchall()
+        return [await _thread_from_row(db, row, updates_limit) for row in rows]
+
+
+async def get_thread_by_ticker(ticker: str, updates_limit: int = 60) -> NarrativeThread | None:
+    async with connect_db() as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM narrative_threads WHERE ticker = ?",
+            (ticker.upper(),),
+        )
+        row = await cursor.fetchone()
+        if not row:
+            return None
+        return await _thread_from_row(db, row, updates_limit)
+
+
+async def upsert_narrative_thread(
+    ticker: str,
+    *,
+    update_date: date,
+    title: str,
+    thesis: str,
+    direction: str = "",
+    conviction: int = 3,
+    update_type: str = "continuing",
+    note: str = "",
+    evidence: dict[str, Any] | None = None,
+) -> int:
+    """Create or refresh a per-ticker thread from today's narrative and log a
+    dated update. A closed/stale thread that gets a fresh narrative reopens."""
+    now = utc_now_iso()
+    t = ticker.upper()
+    async with connect_db() as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute("SELECT id, status FROM narrative_threads WHERE ticker = ?", (t,))
+        row = await cursor.fetchone()
+        if row:
+            thread_id = row["id"]
+            new_status = "closed" if update_type == "resolved" else "active"
+            await db.execute(
+                """
+                UPDATE narrative_threads
+                SET title = ?, thesis = ?, direction = ?, conviction = ?,
+                    status = ?, last_narrative_date = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (title, thesis, direction, conviction, new_status, update_date.isoformat(), now, thread_id),
+            )
+        else:
+            update_type = "new"
+            cursor = await db.execute(
+                """
+                INSERT INTO narrative_threads
+                (ticker, title, status, direction, conviction, thesis, created_date, last_narrative_date, updated_at)
+                VALUES (?, ?, 'active', ?, ?, ?, ?, ?, ?)
+                """,
+                (t, title, direction, conviction, thesis, update_date.isoformat(), update_date.isoformat(), now),
+            )
+            thread_id = cursor.lastrowid or 0
+        await db.execute(
+            """
+            INSERT INTO thread_updates (thread_id, update_date, update_type, note, evidence_json)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(thread_id, update_date) DO UPDATE SET
+                update_type = excluded.update_type,
+                note = excluded.note,
+                evidence_json = excluded.evidence_json
+            """,
+            (thread_id, update_date.isoformat(), update_type, note, json.dumps(evidence or {}, default=str)),
+        )
+        await db.commit()
+        return thread_id
+
+
+async def add_thread_observation(
+    ticker: str,
+    *,
+    update_date: date,
+    note: str,
+    evidence: dict[str, Any] | None = None,
+) -> None:
+    """Log a quiet-day observation on an existing thread without touching the
+    thesis — keeps the storyline continuous when no new narrative was produced.
+    Never overwrites a real narrative update recorded earlier the same day."""
+    now = utc_now_iso()
+    async with connect_db() as db:
+        cursor = await db.execute(
+            "SELECT id FROM narrative_threads WHERE ticker = ?",
+            (ticker.upper(),),
+        )
+        row = await cursor.fetchone()
+        if not row:
+            return
+        thread_id = row[0]
+        await db.execute(
+            """
+            INSERT INTO thread_updates (thread_id, update_date, update_type, note, evidence_json)
+            VALUES (?, ?, 'no_new_evidence', ?, ?)
+            ON CONFLICT(thread_id, update_date) DO NOTHING
+            """,
+            (thread_id, update_date.isoformat(), note, json.dumps(evidence or {}, default=str)),
+        )
+        await db.execute(
+            "UPDATE narrative_threads SET updated_at = ? WHERE id = ?",
+            (now, thread_id),
+        )
+        await db.commit()
+
+
+async def mark_stale_threads(as_of: date, stale_after_days: int) -> int:
+    """Flip active threads to stale when they've gone too long without a fresh
+    narrative. Returns the number of threads staled."""
+    cutoff = (as_of - timedelta(days=stale_after_days)).isoformat()
+    async with connect_db() as db:
+        cursor = await db.execute(
+            """
+            UPDATE narrative_threads
+            SET status = 'stale', updated_at = ?
+            WHERE status = 'active'
+              AND COALESCE(last_narrative_date, created_date) < ?
+            """,
+            (utc_now_iso(), cutoff),
+        )
+        await db.commit()
+        return cursor.rowcount or 0
