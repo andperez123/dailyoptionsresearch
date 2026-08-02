@@ -25,6 +25,7 @@ from database import (
 from locks import LOCK_CATALYST_SCAN, job_lock
 from models import CalendarEvent, DeepDiveResponse
 from pipeline.finnhub import NormalizedHeadline, finnhub_client
+from pipeline.llm import chat_tuning
 from pipeline.market_data import collect_ticker_snapshot, fetch_snapshot
 from pipeline.news import collect_finance_news_for_watchlist, match_tickers_in_text
 from pipeline.options import fetch_options_snapshot
@@ -237,8 +238,7 @@ async def ai_score_headlines(
                 },
             ],
             response_format={"type": "json_object"},
-            temperature=0.3,
-            max_tokens=4000,
+            **chat_tuning(settings.openai_model_mini, temperature=0.3, max_tokens=4000),
         )
         raw = response.choices[0].message.content or "{}"
         data = json.loads(raw)
@@ -391,14 +391,33 @@ async def build_deep_dive(ticker: str) -> DeepDiveResponse:
     catalysts = await get_recent_catalysts_for_ticker(ticker, limit=8)
     events = await list_calendar_events(days=14, tickers=[ticker])
 
-    from pipeline.strategies import propose_strategies, proposals_to_play_dicts
+    from database import get_atm_iv_history
+    from pipeline.strategies import (
+        classify_iv_regime,
+        compute_iv_rank,
+        propose_strategies,
+        proposals_to_play_dicts,
+    )
+
+    iv_rank = None
+    if options.atm_iv is not None:
+        history = await get_atm_iv_history(ticker, days=90, before=now.date())
+        iv_rank = compute_iv_rank(history, options.atm_iv)
+        options.iv_rank = iv_rank
+        options.iv_regime = classify_iv_regime(
+            options.atm_iv,
+            iv_rank=iv_rank,
+            realized_vol=getattr(options, "realized_vol_20d", None),
+        )
 
     options_data = {
         "nearest_expiry": options.nearest_expiry,
         "next_expiry": getattr(options, "next_expiry", None),
         "avg_iv": options.avg_iv,
         "atm_iv": getattr(options, "atm_iv", None),
+        "iv_rank": iv_rank,
         "iv_regime": getattr(options, "iv_regime", None),
+        "realized_vol_20d": getattr(options, "realized_vol_20d", None),
         "call_put_iv_skew": getattr(options, "call_put_iv_skew", None),
         "put_call_volume_ratio": options.put_call_volume_ratio,
         "notable_calls": [
@@ -428,6 +447,13 @@ async def build_deep_dive(ticker: str) -> DeepDiveResponse:
             catalyst_type=top.catalyst_type if top else None,
             half_life=top.half_life if top else None,
             limit=3,
+            atm_iv=getattr(options, "atm_iv", None),
+            iv_rank=iv_rank,
+            realized_vol=getattr(options, "realized_vol_20d", None),
+            iv_skew=getattr(options, "call_put_iv_skew", None),
+            chains=getattr(options, "chains", None),
+            min_leg_open_interest=settings.options_min_leg_open_interest,
+            max_leg_spread_pct=settings.options_max_leg_spread_pct,
         )
         options_data["strategy_candidates"] = proposals_to_play_dicts(proposals)
 
@@ -470,8 +496,7 @@ async def build_deep_dive(ticker: str) -> DeepDiveResponse:
                     },
                 ],
                 response_format={"type": "json_object"},
-                temperature=0.4,
-                max_tokens=2000,
+                **chat_tuning(settings.openai_model_mini, temperature=0.4, max_tokens=2000),
             )
             parsed = json.loads(response.choices[0].message.content or "{}")
             bull_case = parsed.get("bull_case", "")

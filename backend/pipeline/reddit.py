@@ -4,6 +4,8 @@ import asyncio
 from dataclasses import dataclass, field
 
 import logging
+import math
+import re
 import time
 
 import feedparser
@@ -13,6 +15,7 @@ from config import settings
 
 logger = logging.getLogger(__name__)
 
+from pipeline.tickers import extract_cashtags
 from pipeline.tickers import extract_ticker_set as extract_tickers
 
 
@@ -153,10 +156,46 @@ async def collect_reddit_posts(
     return posts
 
 
+def _dedupe_key(post: RedditPost) -> str:
+    """Crossposts share (near-)identical titles across subreddits."""
+    return re.sub(r"[^a-z0-9]", "", post.title.lower())[:80]
+
+
 def count_ticker_mentions(posts: list[RedditPost]) -> dict[str, int]:
+    """Raw per-post mention counts — persisted daily and used as the buzz
+    baseline history, so the unit must stay a simple integer."""
     counts: dict[str, int] = {}
+    seen: set[str] = set()
     for post in posts:
+        key = _dedupe_key(post)
+        if key and key in seen:
+            continue
+        seen.add(key)
         text = " ".join([post.title, post.selftext, *post.top_comments])
         for ticker in extract_tickers(text):
             counts[ticker] = counts.get(ticker, 0) + 1
     return dict(sorted(counts.items(), key=lambda x: x[1], reverse=True))
+
+
+def weighted_ticker_buzz(posts: list[RedditPost]) -> dict[str, float]:
+    """Engagement-weighted buzz used for watchlist selection.
+
+    Each unique post votes once per ticker, scaled by log engagement so a
+    20k-upvote thread outweighs a burst of zero-engagement spam. Explicit
+    $CASHTAG mentions get a bonus because they are unambiguous.
+    """
+    scores: dict[str, float] = {}
+    seen: set[str] = set()
+    for post in posts:
+        key = _dedupe_key(post)
+        if key and key in seen:
+            continue
+        seen.add(key)
+        text = " ".join([post.title, post.selftext, *post.top_comments])
+        engagement = max(post.score, 0) + max(post.num_comments, 0)
+        weight = 1.0 + math.log10(1 + engagement)
+        cashtags = extract_cashtags(text)
+        for ticker in extract_tickers(text):
+            bonus = 1.5 if ticker in cashtags else 1.0
+            scores[ticker] = scores.get(ticker, 0.0) + weight * bonus
+    return dict(sorted(scores.items(), key=lambda x: x[1], reverse=True))

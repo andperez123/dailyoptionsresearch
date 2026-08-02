@@ -231,14 +231,20 @@ def test_parse_model_json_rejects_empty() -> None:
         _parse_model_json("   ")
 
 
+def _near_expiry(days: int = 7) -> str:
+    from datetime import date as _date
+
+    return (_date.today() + timedelta(days=days)).isoformat()
+
+
 def test_propose_strategies_prefers_spreads_when_iv_elevated() -> None:
     from pipeline.strategies import propose_strategies
 
     proposals = propose_strategies(
         ticker="NVDA",
         price=140.0,
-        nearest_expiry="2026-08-08",
-        next_expiry="2026-08-15",
+        nearest_expiry=_near_expiry(7),
+        next_expiry=_near_expiry(14),
         avg_iv=0.65,
         put_call_ratio=0.6,
         catalyst_direction="bullish",
@@ -257,8 +263,8 @@ def test_propose_strategies_event_bias_includes_strangle() -> None:
     proposals = propose_strategies(
         ticker="AAPL",
         price=200.0,
-        nearest_expiry="2026-08-08",
-        next_expiry="2026-09-19",
+        nearest_expiry=_near_expiry(7),
+        next_expiry=_near_expiry(49),
         avg_iv=0.4,
         catalyst_direction="volatility",
         catalyst_type="earnings",
@@ -266,6 +272,145 @@ def test_propose_strategies_event_bias_includes_strangle() -> None:
     )
     types = {p.strategy_type for p in proposals}
     assert "long_strangle" in types or "calendar_call" in types
+
+
+def _fake_chain(strikes: list[float], low_oi_strikes: set[float] | None = None) -> dict:
+    """Chain with call mids declining and put mids rising in strike."""
+    low_oi_strikes = low_oi_strikes or set()
+    chain: dict[float, dict] = {}
+    for strike in strikes:
+        call_mid = max(0.1, round(8.0 - 0.5 * (strike - 90.0), 2))
+        put_mid = max(0.1, round(0.5 * (strike - 90.0) + 0.3, 2))
+        oi = 5 if strike in low_oi_strikes else 500
+        chain[strike] = {
+            "call": {
+                "bid": call_mid - 0.05,
+                "ask": call_mid + 0.05,
+                "mid": call_mid,
+                "oi": oi,
+                "volume": 50,
+                "iv": 0.6,
+            },
+            "put": {
+                "bid": put_mid - 0.05,
+                "ask": put_mid + 0.05,
+                "mid": put_mid,
+                "oi": oi,
+                "volume": 50,
+                "iv": 0.62,
+            },
+        }
+    return chain
+
+
+def test_propose_strategies_snaps_strikes_to_liquid_chain() -> None:
+    from pipeline.strategies import propose_strategies
+
+    expiry = _near_expiry(10)
+    strikes = [90.0, 92.5, 95.0, 97.5, 100.0, 102.5, 105.0, 107.5, 110.0]
+    chains = {expiry: _fake_chain(strikes, low_oi_strikes={105.0})}
+
+    proposals = propose_strategies(
+        ticker="ACME",
+        price=100.0,
+        nearest_expiry=expiry,
+        avg_iv=0.6,
+        catalyst_direction="bullish",
+        limit=3,
+        atm_iv=0.6,
+        chains=chains,
+        min_leg_open_interest=100,
+        max_leg_spread_pct=15.0,
+    )
+    assert proposals
+    listed = set(strikes) - {105.0}
+    for proposal in proposals:
+        for leg in proposal.legs:
+            assert float(leg["strike"]) in listed, f"{proposal.strategy_type} leg off-chain"
+    # Priced from mids — risk strings should carry real dollar amounts
+    debit_spread = next(p for p in proposals if p.strategy_type == "debit_call_spread")
+    assert "$" in debit_spread.max_loss and "debit" in debit_spread.max_loss
+    assert debit_spread.breakeven.startswith("$")
+
+
+def test_propose_strategies_skips_premium_selling_near_expiry() -> None:
+    from pipeline.strategies import propose_strategies
+
+    proposals = propose_strategies(
+        ticker="ACME",
+        price=100.0,
+        nearest_expiry=_near_expiry(1),
+        avg_iv=0.7,
+        catalyst_direction="neutral",
+        limit=6,
+    )
+    types = {p.strategy_type for p in proposals}
+    assert not types & {"iron_condor", "iron_butterfly", "credit_put_spread", "credit_call_spread"}
+
+
+def test_propose_strategies_gates_risk_reversal_on_skew() -> None:
+    from pipeline.strategies import propose_strategies
+
+    common = dict(
+        ticker="ACME",
+        price=100.0,
+        nearest_expiry=_near_expiry(10),
+        next_expiry=_near_expiry(40),
+        avg_iv=0.25,
+        catalyst_direction="bullish",
+        limit=6,
+    )
+    rich_put_skew = propose_strategies(**common, iv_skew=0.05)
+    assert "risk_reversal" in {p.strategy_type for p in rich_put_skew}
+    call_skew = propose_strategies(**common, iv_skew=-0.05)
+    assert "risk_reversal" not in {p.strategy_type for p in call_skew}
+
+
+def test_compute_iv_rank_requires_history() -> None:
+    from pipeline.strategies import compute_iv_rank
+
+    assert compute_iv_rank([0.4] * 5, 0.5) is None
+    history = [0.30, 0.32, 0.35, 0.31, 0.33, 0.36, 0.34, 0.38, 0.40, 0.37]
+    rank = compute_iv_rank(history, 0.40)
+    assert rank == 1.0
+    assert compute_iv_rank(history, 0.30) == 0.0
+
+
+def test_classify_iv_regime_prefers_rank_over_absolute_level() -> None:
+    from pipeline.strategies import classify_iv_regime
+
+    # 50% IV is "moderate" on absolute thresholds but cheap for this name
+    assert classify_iv_regime(0.50) == "moderate"
+    assert classify_iv_regime(0.50, iv_rank=0.05) == "cheap"
+    assert classify_iv_regime(0.50, iv_rank=0.9) == "elevated"
+    # Implied-vs-realized fallback when no rank history exists
+    assert classify_iv_regime(0.50, realized_vol=0.30) == "elevated"
+    assert classify_iv_regime(0.30, realized_vol=0.50) == "cheap"
+
+
+def test_select_target_expiries_skips_theta_traps() -> None:
+    from datetime import date as _date
+
+    from pipeline.options import select_target_expiries
+
+    today = _date(2026, 8, 1)
+    expiries = [
+        "2026-08-02",  # 1 DTE — skip
+        "2026-08-04",  # 3 DTE — skip
+        "2026-08-10",  # 9 DTE — front
+        "2026-09-04",  # 34 DTE — back
+        "2026-10-16",
+    ]
+    front, back = select_target_expiries(expiries, today=today, min_front_dte=5, min_back_dte=25)
+    assert front == "2026-08-10"
+    assert back == "2026-09-04"
+
+    # Only short-dated listings: fall back to the furthest available
+    front, back = select_target_expiries(
+        ["2026-08-02", "2026-08-04"], today=today, min_front_dte=5, min_back_dte=25
+    )
+    assert front == "2026-08-04"
+    assert back is None
 
 
 def test_build_ticker_dossiers_corroborates_multi_domain_news() -> None:
@@ -678,6 +823,147 @@ def test_validate_sports_angles_attaches_engine_decision() -> None:
     assert valid[0].bet_decision is not None
     assert valid[0].bet_decision.decision == "bet"
     assert valid[0].bet_decision.selection == "France"
+
+
+def test_select_top_tickers_filters_to_universe() -> None:
+    counts = {"NVDA": 10, "FOMC": 9, "TLDR": 8, "AMD": 3}
+    universe = {"NVDA", "AMD"}
+    assert select_top_tickers(counts, limit=3, universe=universe) == ["NVDA", "AMD"]
+    # No universe available → no filtering (outage must not blank the watchlist)
+    assert select_top_tickers(counts, limit=2, universe=None) == ["NVDA", "FOMC"]
+
+
+def test_compute_buzz_zscores_uses_trailing_baseline() -> None:
+    from pipeline.synthesis import compute_buzz_zscores
+
+    today = {"AAA": 8, "BBB": 3, "CCC": 2}
+    history = {
+        "AAA": [2, 2, 2, 2, 2, 2, 2],  # steady baseline, today spikes
+        "CCC": [2, 2, 2, 2, 2, 2, 2],  # steady baseline, today flat
+    }
+    z = compute_buzz_zscores(today, history, window_days=7)
+    assert z["AAA"] == 6.0
+    assert z["BBB"] == 3.0  # brand new ticker vs zero-padded history
+    assert z["CCC"] == 0.0
+    # A 1→2 blip no longer reads as +100%
+    blip = compute_buzz_zscores({"DDD": 2}, {"DDD": [1]}, window_days=7)
+    assert blip["DDD"] < 2.0
+
+
+def test_weighted_ticker_buzz_weighs_engagement_and_dedupes() -> None:
+    from pipeline.reddit import RedditPost, weighted_ticker_buzz
+
+    def post(title: str, score: int, comments: int) -> RedditPost:
+        return RedditPost(
+            subreddit="wallstreetbets",
+            title=title,
+            selftext="",
+            url="https://old.reddit.com/x",
+            permalink="/x",
+            score=score,
+            num_comments=comments,
+            created_utc=0.0,
+        )
+
+    viral = post("NVDA earnings megathread", 20000, 5000)
+    spam = [post(f"BBBY to the moon {i}", 0, 0) for i in range(5)]
+    crosspost_a = post("AMD is undervalued!", 10, 2)
+    crosspost_b = post("AMD is undervalued!", 10, 2)  # same title, other sub
+
+    scores = weighted_ticker_buzz([viral, *spam, crosspost_a, crosspost_b])
+    assert scores["NVDA"] > scores["BBBY"], "one viral thread must outweigh 5 spam posts"
+    # crossposts collapse to a single vote
+    single = weighted_ticker_buzz([crosspost_a])
+    assert scores["AMD"] == single["AMD"]
+
+
+def test_extract_cashtags_ignores_common_words() -> None:
+    from pipeline.tickers import extract_cashtags
+
+    tags = extract_cashtags("Loaded up on $nvda and $AMD, USA YOLO $THE")
+    assert tags == {"NVDA", "AMD"}
+
+
+def test_validate_narratives_replaces_plays_with_offchain_legs() -> None:
+    from pipeline.options import OptionsSnapshot
+    from pipeline.research import validate_narratives
+
+    expiry = _near_expiry(10)
+    snapshot = OptionsSnapshot(
+        ticker="ACME",
+        current_price=100.0,
+        nearest_expiry=expiry,
+        chains={expiry: _fake_chain([95.0, 100.0, 105.0])},
+    )
+    dossiers = [
+        {
+            "ticker": "ACME",
+            "research_quality": {
+                "independent_source_count": 2,
+                "distinct_domains": ["reuters.com", "cnbc.com"],
+                "source_types": ["news"],
+                "corroborated_claim_count": 1,
+                "meets_multi_source_bar": True,
+                "news_domain_count": 2,
+            },
+            "sources": [],
+            "strategy_candidates": [
+                {
+                    "ticker": "ACME",
+                    "direction": "bullish",
+                    "strategy_type": "debit_call_spread",
+                    "structure": "Buy 100C / Sell 105C",
+                    "strike_zone": "$100/$105",
+                    "expiry": expiry,
+                    "legs": [],
+                    "degen_score": 2,
+                }
+            ],
+        }
+    ]
+    hallucinated = {
+        "title": "ACME breakout",
+        "tickers": ["ACME"],
+        "sources": [],
+        "options_plays": [
+            {
+                "ticker": "ACME",
+                "strategy_type": "debit_call_spread",
+                "direction": "bullish",
+                "degen_score": 2,
+                "legs": [
+                    # Strike 137 does not exist in the chain
+                    {"action": "buy", "option_type": "call", "strike": "137", "expiry": expiry},
+                ],
+            }
+        ],
+    }
+    kept = validate_narratives(
+        [hallucinated], dossiers, require_multi_source=False, options=[snapshot]
+    )
+    plays = kept[0]["options_plays"]
+    assert plays and plays[0]["strategy_type"] == "debit_call_spread"
+    assert plays[0]["structure"] == "Buy 100C / Sell 105C", "off-chain play must be replaced"
+
+
+def test_llm_tuning_params_by_model_family() -> None:
+    from pipeline.llm import chat_tuning, is_reasoning_model, responses_tuning
+
+    assert is_reasoning_model("gpt-5.6")
+    assert is_reasoning_model("gpt-5.6-luna")
+    assert not is_reasoning_model("gpt-4o")
+
+    legacy = chat_tuning("gpt-4o", temperature=0.4, max_tokens=2000)
+    assert legacy == {"temperature": 0.4, "max_tokens": 2000}
+    modern = chat_tuning("gpt-5.6-luna", temperature=0.4, max_tokens=2000)
+    assert modern == {"max_completion_tokens": 2000}
+
+    assert responses_tuning("gpt-4o", temperature=0.45, reasoning_effort="medium") == {
+        "temperature": 0.45
+    }
+    assert responses_tuning("gpt-5.6", temperature=0.45, reasoning_effort="medium") == {
+        "reasoning": {"effort": "medium"}
+    }
 
 
 def test_score_event_relevance_increases_with_news_hits() -> None:

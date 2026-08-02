@@ -278,6 +278,21 @@ async def init_db() -> None:
         )
         await db.execute(
             """
+            CREATE TABLE IF NOT EXISTS iv_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ticker TEXT NOT NULL,
+                obs_date TEXT NOT NULL,
+                atm_iv REAL NOT NULL,
+                realized_vol REAL,
+                UNIQUE(ticker, obs_date)
+            )
+            """
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_iv_history_ticker ON iv_history(ticker, obs_date DESC)"
+        )
+        await db.execute(
+            """
             CREATE TABLE IF NOT EXISTS research_jobs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 job_type TEXT NOT NULL,
@@ -394,6 +409,31 @@ async def save_ticker_mentions(mention_date: date, counts: dict[str, int]) -> No
         await db.commit()
 
 
+async def get_ticker_mention_history(
+    end_date: date,
+    days: int = 7,
+) -> dict[str, list[int]]:
+    """Per-ticker daily mention counts for the `days` days before `end_date`
+    (exclusive). Missing days are omitted — callers should zero-pad to the
+    window length when computing baselines."""
+    start = end_date - timedelta(days=days)
+    async with connect_db() as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """
+            SELECT ticker, mention_date, mention_count FROM ticker_mentions
+            WHERE mention_date >= ? AND mention_date < ?
+            ORDER BY mention_date ASC
+            """,
+            (start.isoformat(), end_date.isoformat()),
+        )
+        rows = await cursor.fetchall()
+        history: dict[str, list[int]] = {}
+        for row in rows:
+            history.setdefault(row["ticker"], []).append(row["mention_count"])
+        return history
+
+
 async def get_ticker_mentions(mention_date: date) -> dict[str, int]:
     async with connect_db() as db:
         db.row_factory = aiosqlite.Row
@@ -403,6 +443,49 @@ async def get_ticker_mentions(mention_date: date) -> dict[str, int]:
         )
         rows = await cursor.fetchall()
         return {row["ticker"]: row["mention_count"] for row in rows}
+
+
+async def save_iv_observations(
+    obs_date: date,
+    observations: dict[str, tuple[float, float | None]],
+) -> None:
+    """Persist per-ticker (atm_iv, realized_vol) so IV rank can be computed
+    from the ticker's own history instead of absolute thresholds."""
+    async with connect_db() as db:
+        for ticker, (atm_iv, realized_vol) in observations.items():
+            await db.execute(
+                """
+                INSERT INTO iv_history (ticker, obs_date, atm_iv, realized_vol)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(ticker, obs_date) DO UPDATE SET
+                    atm_iv = excluded.atm_iv,
+                    realized_vol = excluded.realized_vol
+                """,
+                (ticker.upper(), obs_date.isoformat(), atm_iv, realized_vol),
+            )
+        await db.commit()
+
+
+async def get_atm_iv_history(
+    ticker: str,
+    days: int = 90,
+    before: date | None = None,
+) -> list[float]:
+    """ATM IV observations for the trailing window, oldest first. Excludes
+    `before` itself so today's print doesn't rank against itself."""
+    end = before or date.today()
+    start = end - timedelta(days=days)
+    async with connect_db() as db:
+        cursor = await db.execute(
+            """
+            SELECT atm_iv FROM iv_history
+            WHERE ticker = ? AND obs_date >= ? AND obs_date < ?
+            ORDER BY obs_date ASC
+            """,
+            (ticker.upper(), start.isoformat(), end.isoformat()),
+        )
+        rows = await cursor.fetchall()
+        return [row[0] for row in rows if row[0] is not None]
 
 
 async def set_pipeline_state(key: str, value: str) -> None:

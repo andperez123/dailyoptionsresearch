@@ -217,7 +217,10 @@ def build_ticker_dossiers(
                 "put_call_volume_ratio": opt.put_call_volume_ratio,
                 "iv_regime": getattr(opt, "iv_regime", None),
                 "atm_iv": getattr(opt, "atm_iv", None),
+                "iv_rank": getattr(opt, "iv_rank", None),
+                "realized_vol_20d": getattr(opt, "realized_vol_20d", None),
                 "call_put_iv_skew": getattr(opt, "call_put_iv_skew", None),
+                "pct_change": getattr(opt, "pct_change", None),
             }
             proposals = propose_strategies(
                 ticker=t,
@@ -226,11 +229,18 @@ def build_ticker_dossiers(
                 next_expiry=getattr(opt, "next_expiry", None),
                 avg_iv=opt.avg_iv,
                 put_call_ratio=opt.put_call_volume_ratio,
-                pct_change=None,
+                pct_change=getattr(opt, "pct_change", None),
                 catalyst_direction=top_cat.get("direction"),
                 catalyst_type=top_cat.get("catalyst_type"),
                 half_life=top_cat.get("half_life"),
                 limit=3,
+                atm_iv=getattr(opt, "atm_iv", None),
+                iv_rank=getattr(opt, "iv_rank", None),
+                realized_vol=getattr(opt, "realized_vol_20d", None),
+                iv_skew=getattr(opt, "call_put_iv_skew", None),
+                chains=getattr(opt, "chains", None),
+                min_leg_open_interest=settings.options_min_leg_open_interest,
+                max_leg_spread_pct=settings.options_max_leg_spread_pct,
             )
             strategy_candidates = proposals_to_play_dicts(proposals)
 
@@ -284,11 +294,62 @@ def build_ticker_dossiers(
     return dossiers
 
 
+_WEAK_STRATEGY_TYPES = {
+    "call",
+    "put",
+    "long_call",
+    "long_put",
+    "directional_calls",
+    "directional_puts",
+    "",
+}
+
+
+def _legs_match_chain(play: dict[str, Any], snapshot: OptionsSnapshot | None) -> bool:
+    """True when every leg of a model-proposed play references a listed
+    strike/expiry/side in the fetched chain. Plays without legs, or tickers
+    without chain data, can't be checked and pass by default."""
+    legs = play.get("legs") or []
+    if not legs:
+        return True
+    chains = getattr(snapshot, "chains", None) if snapshot else None
+    if not chains:
+        return True
+    for leg in legs:
+        expiry = str(leg.get("expiry", ""))[:10]
+        chain = chains.get(expiry)
+        if chain is None:
+            return False
+        action = leg.get("action")
+        option_type = leg.get("option_type")
+        if action not in {"buy", "sell"} or option_type not in {"call", "put"}:
+            return False
+        try:
+            strike = float(leg.get("strike"))
+        except (TypeError, ValueError):
+            return False
+        matched = next(
+            (sides for listed, sides in chain.items() if abs(strike - listed) < 0.01),
+            None,
+        )
+        if not matched or not matched.get(option_type):
+            return False
+    return True
+
+
+def _play_is_weak(play: dict[str, Any], snapshot: OptionsSnapshot | None) -> bool:
+    strategy = str(play.get("strategy_type", play.get("direction", ""))).lower()
+    if strategy in _WEAK_STRATEGY_TYPES:
+        return True
+    return not _legs_match_chain(play, snapshot)
+
+
 def validate_narratives(
     narratives: list[dict[str, Any]],
     dossiers: list[dict[str, Any]],
     *,
     require_multi_source: bool | None = None,
+    options: list[OptionsSnapshot] | None = None,
 ) -> list[dict[str, Any]]:
     """Attach research_quality, prefer multi-source, drop single-source weak theses."""
     hard_gate = (
@@ -297,6 +358,7 @@ def validate_narratives(
         else require_multi_source
     )
     dossier_by_ticker = {d["ticker"]: d for d in dossiers}
+    snapshot_by_ticker = {o.ticker.upper(): o for o in options or []}
     validated: list[dict[str, Any]] = []
 
     for raw in narratives:
@@ -355,30 +417,28 @@ def validate_narratives(
                 break
         raw["sources"] = enriched_sources
 
+        # Drop model plays that are naked long options or reference strikes/
+        # expiries missing from the real chain; backfill from deterministic
+        # strategy candidates so narratives keep an actionable structure.
         plays = raw.get("options_plays") or []
-        weak_plays = (
-            all(
-                str(p.get("strategy_type", p.get("direction", ""))).lower()
-                in {
-                    "call",
-                    "put",
-                    "long_call",
-                    "long_put",
-                    "directional_calls",
-                    "directional_puts",
-                    "",
-                }
-                for p in plays
-            )
-            if plays
-            else True
-        )
-        if weak_plays:
+        kept_plays = [
+            p
+            for p in plays
+            if not _play_is_weak(p, snapshot_by_ticker.get(str(p.get("ticker", "")).upper()))
+        ]
+        if len(kept_plays) < 2:
             candidates = []
             for d in matched:
                 candidates.extend(d.get("strategy_candidates") or [])
-            if candidates:
-                raw["options_plays"] = candidates[:2]
+            existing_types = {p.get("strategy_type") for p in kept_plays}
+            for candidate in candidates:
+                if len(kept_plays) >= 2:
+                    break
+                if candidate.get("strategy_type") not in existing_types:
+                    kept_plays.append(candidate)
+                    existing_types.add(candidate.get("strategy_type"))
+        if kept_plays:
+            raw["options_plays"] = kept_plays[:3]
 
         if hard_gate and not meets:
             continue

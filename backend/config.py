@@ -19,10 +19,19 @@ class Settings(BaseSettings):
     api_secret: str = ""
     sec_user_agent: str = "DegenResearchBot/1.0 (research@localhost)"
     database_path: str = str(ROOT_DIR / "data" / "briefings.db")
-    openai_model_mini: str = "gpt-4o-mini"
-    openai_model: str = "gpt-4o"
+    # gpt-5.6 routes to gpt-5.6-sol (flagship); luna is the high-volume tier
+    openai_model_mini: str = "gpt-5.6-luna"
+    openai_model: str = "gpt-5.6"
+    openai_reasoning_effort: str = "medium"
     reddit_user_agent: str = "DegenResearchBot/1.0 (personal research tool)"
     max_tickers: int = 15
+    buzz_baseline_days: int = 7
+
+    # Options strategy engine
+    options_min_front_dte: int = 5
+    options_min_back_dte: int = 25
+    options_min_leg_open_interest: int = 50
+    options_max_leg_spread_pct: float = 15.0
 
     news_scan_interval_minutes: int = 15
     market_scan_interval_minutes: int = 10

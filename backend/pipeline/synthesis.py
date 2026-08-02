@@ -9,6 +9,7 @@ from openai import AsyncOpenAI
 
 from config import settings
 from models import BriefingContent, SourceLink, SportsAngle, SportsBetDecision
+from pipeline.llm import chat_tuning, responses_tuning
 from pipeline.news import NewsItem
 from pipeline.odds import SportsEvent
 from pipeline.options import OptionsSnapshot
@@ -19,26 +20,42 @@ from pipeline.sports_strategies import BetDecision, decision_to_dict
 logger = logging.getLogger(__name__)
 
 
-def compute_buzz_delta(
+def compute_buzz_zscores(
     today_counts: dict[str, int],
-    yesterday_counts: dict[str, int],
+    history: dict[str, list[int]],
+    window_days: int | None = None,
 ) -> dict[str, float]:
-    deltas: dict[str, float] = {}
+    """Buzz as a z-score against each ticker's trailing daily baseline.
+
+    Replaces yesterday-only percent change, which mixed units (new tickers got
+    absolute counts) and amplified 1→2 mention noise. Missing history days are
+    zero-padded so a genuinely new spike still scores high, while the std-dev
+    floor of 1 keeps sparse counts from dividing by ~0."""
+    window = window_days or settings.buzz_baseline_days
+    zscores: dict[str, float] = {}
     for ticker, count in today_counts.items():
-        prev = yesterday_counts.get(ticker, 0)
-        if prev == 0:
-            deltas[ticker] = float(count)
-        else:
-            deltas[ticker] = round((count - prev) / prev, 2)
-    return deltas
+        past = list(history.get(ticker, []))[-window:]
+        past += [0] * (window - len(past))
+        mean = sum(past) / window
+        variance = sum((x - mean) ** 2 for x in past) / window
+        std = max(variance**0.5, 1.0)
+        zscores[ticker] = round((count - mean) / std, 2)
+    return zscores
 
 
 def select_top_tickers(
-    counts: dict[str, int],
+    counts: dict[str, int | float],
     limit: int | None = None,
+    universe: set[str] | None = None,
 ) -> list[str]:
+    """Top tickers by buzz score, restricted to real listed symbols when a
+    universe is available (None means validation was impossible — do not
+    filter, or an outage would blank the watchlist)."""
     limit = limit or settings.max_tickers
-    return sorted(counts, key=counts.get, reverse=True)[:limit]
+    candidates = (
+        {t: v for t, v in counts.items() if t in universe} if universe is not None else counts
+    )
+    return sorted(candidates, key=candidates.get, reverse=True)[:limit]
 
 
 def _serialize_posts(posts: list[RedditPost], limit: int = 20) -> list[dict]:
@@ -77,12 +94,15 @@ def _serialize_options(options: list[OptionsSnapshot]) -> list[dict]:
             {
                 "ticker": snap.ticker,
                 "price": snap.current_price,
+                "pct_change": getattr(snap, "pct_change", None),
                 "nearest_expiry": snap.nearest_expiry,
                 "next_expiry": getattr(snap, "next_expiry", None),
                 "avg_iv": snap.avg_iv,
                 "atm_iv": getattr(snap, "atm_iv", None),
                 "call_put_iv_skew": getattr(snap, "call_put_iv_skew", None),
                 "iv_regime": getattr(snap, "iv_regime", None),
+                "iv_rank": getattr(snap, "iv_rank", None),
+                "realized_vol_20d": getattr(snap, "realized_vol_20d", None),
                 "put_call_volume_ratio": snap.put_call_volume_ratio,
                 "notable_calls": [
                     {
@@ -481,8 +501,12 @@ async def _generate_briefing_json(
                     input=user_prompt,
                     tools=tools,
                     max_tool_calls=settings.openai_max_tool_calls,
-                    temperature=0.45,
                     text={"format": {"type": "json_object"}},
+                    **responses_tuning(
+                        settings.openai_model,
+                        temperature=0.45,
+                        reasoning_effort=settings.openai_reasoning_effort,
+                    ),
                 )
             except Exception as exc:
                 logger.warning("Responses API call failed (web=%s): %s", use_web, exc)
@@ -510,8 +534,7 @@ async def _generate_briefing_json(
             {"role": "user", "content": user_prompt},
         ],
         response_format={"type": "json_object"},
-        temperature=0.45,
-        max_tokens=6000,
+        **chat_tuning(settings.openai_model, temperature=0.45, max_tokens=6000),
     )
     raw = response.choices[0].message.content or "{}"
     if not raw.strip():
@@ -532,11 +555,14 @@ async def synthesize_briefing(
     macro_context: list[dict[str, Any]] | None = None,
     sports_news: list[dict[str, Any]] | None = None,
     sports_bet_decisions: list[BetDecision] | None = None,
+    top_tickers: list[str] | None = None,
 ) -> BriefingContent:
     if not settings.openai_api_key:
         raise ValueError("OPENAI_API_KEY is not configured")
 
-    top_tickers = select_top_tickers(ticker_counts)
+    # Prefer the caller's universe-validated watchlist; fall back to raw counts
+    if top_tickers is None:
+        top_tickers = select_top_tickers(ticker_counts)
     dossiers = build_ticker_dossiers(
         tickers=top_tickers,
         news=news,
@@ -587,11 +613,12 @@ async def synthesize_briefing(
         raw_narratives,
         dossiers,
         require_multi_source=settings.require_multi_source_narratives,
+        options=options,
     )
     if not data["narratives"] and raw_narratives and settings.require_multi_source_narratives:
         # Thin corroboration day — keep narratives but mark low confidence
         data["narratives"] = validate_narratives(
-            raw_narratives, dossiers, require_multi_source=False
+            raw_narratives, dossiers, require_multi_source=False, options=options
         )
         for narrative in data["narratives"]:
             rq = narrative.setdefault("research_quality", {})
@@ -653,6 +680,6 @@ async def synthesize_briefing(
         "briefing_news_max_age_hours": settings.briefing_news_max_age_hours,
         "min_independent_sources": settings.min_independent_sources,
         "require_multi_source_narratives": settings.require_multi_source_narratives,
-        "strategy_engine": "strategies-v1",
+        "strategy_engine": "strategies-v2",
     }
     return BriefingContent.model_validate(data)

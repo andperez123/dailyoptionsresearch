@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 
 TICKER_PATTERN = re.compile(r"\$?([A-Z]{1,5})\b")
+CASHTAG_PATTERN = re.compile(r"\$([A-Za-z]{1,5})\b")
 COMMON_WORDS = {
     "A",
     "AI",
@@ -80,3 +81,12 @@ def extract_tickers(text: str) -> list[str]:
 
 def extract_ticker_set(text: str) -> set[str]:
     return set(extract_tickers(text))
+
+
+def extract_cashtags(text: str) -> set[str]:
+    """Explicit $TICK mentions — unambiguous, unlike bare uppercase words."""
+    return {
+        match.upper()
+        for match in CASHTAG_PATTERN.findall(text)
+        if 1 < len(match) <= 5 and match.upper() not in COMMON_WORDS
+    }
