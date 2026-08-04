@@ -42,14 +42,20 @@ class RunReportBuilder:
         multi_source = sum(1 for v in verdicts if v.get("meets_multi_source_bar"))
         dropped = self.extra.get("narratives_dropped") or []
 
+        sports_setups = self.extra.get("sports_top_setups") or []
+
         if narrative_count > 0:
             tickers = sorted(
                 {t for v in verdicts if v.get("meets_multi_source_bar") for t in [v.get("ticker")] if t}
             )
             ticker_note = f" ({', '.join(tickers[:6])})" if tickers else ""
+            low_conf = self.extra.get("low_confidence_narratives") or 0
+            low_conf_note = f", {low_conf} low-confidence" if low_conf else ""
+            sports_note = f" · {len(sports_setups)} sports setup(s)" if sports_setups else ""
             return (
                 f"{narrative_count} narrative{'s' if narrative_count != 1 else ''} from "
                 f"{multi_source}/{dossier_count} multi-source dossiers{ticker_note}"
+                f"{low_conf_note}{sports_note}"
             )
 
         # Empty day — explain why in one line
@@ -65,4 +71,9 @@ class RunReportBuilder:
         raw = self.extra.get("raw_narrative_count")
         if raw == 0:
             parts.append("model proposed no theses")
+        if sports_setups:
+            best_ev = sports_setups[0].get("ev_pct")
+            ev_note = f" (best {best_ev:+.1f}% EV)" if isinstance(best_ev, (int, float)) else ""
+            parts.append(f"sports still surfaced {len(sports_setups)} setup(s){ev_note}")
+        parts.append("full research review saved with this report")
         return ": ".join([parts[0], "; ".join(parts[1:])]) if len(parts) > 1 else parts[0]

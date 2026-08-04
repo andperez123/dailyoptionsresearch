@@ -333,6 +333,63 @@ def test_propose_strategies_snaps_strikes_to_liquid_chain() -> None:
     assert debit_spread.breakeven.startswith("$")
 
 
+def test_propose_strategies_relaxes_liquidity_instead_of_blanking() -> None:
+    """A chain whose strikes all miss the OI bar must degrade to labeled
+    lower-liquidity proposals, not an empty engine."""
+    from pipeline.strategies import propose_strategies
+
+    expiry = _near_expiry(10)
+    strikes = [90.0, 95.0, 100.0, 105.0, 110.0]
+    chains = {expiry: _fake_chain(strikes, low_oi_strikes=set(strikes))}  # all OI=5
+
+    proposals = propose_strategies(
+        ticker="THIN",
+        price=100.0,
+        nearest_expiry=expiry,
+        avg_iv=0.6,
+        catalyst_direction="bullish",
+        limit=3,
+        atm_iv=0.6,
+        chains=chains,
+        min_leg_open_interest=100,
+        max_leg_spread_pct=15.0,
+    )
+    assert proposals, "engine must not return nothing on a thin chain"
+    for proposal in proposals:
+        assert "liquidity" in proposal.risk_note.lower()
+        for leg in proposal.legs:
+            assert float(leg["strike"]) in set(strikes), "relaxed legs still on the listed chain"
+
+
+def test_propose_strategies_synthetic_fallback_when_no_usable_quotes() -> None:
+    """Zero-mid chains (e.g. pre-open) fall back to synthetic strike targets
+    with an explicit verification warning."""
+    from pipeline.strategies import propose_strategies
+
+    expiry = _near_expiry(10)
+    dead_chain = {
+        strike: {
+            "call": {"bid": 0, "ask": 0, "mid": 0, "oi": 0, "volume": 0, "iv": None},
+            "put": {"bid": 0, "ask": 0, "mid": 0, "oi": 0, "volume": 0, "iv": None},
+        }
+        for strike in [95.0, 100.0, 105.0]
+    }
+    proposals = propose_strategies(
+        ticker="DEAD",
+        price=100.0,
+        nearest_expiry=expiry,
+        avg_iv=0.6,
+        catalyst_direction="bullish",
+        limit=3,
+        atm_iv=0.6,
+        chains={expiry: dead_chain},
+        min_leg_open_interest=50,
+        max_leg_spread_pct=15.0,
+    )
+    assert proposals, "engine must not return nothing when quotes are dead"
+    assert all("synthetic" in p.risk_note.lower() for p in proposals)
+
+
 def test_propose_strategies_skips_premium_selling_near_expiry() -> None:
     from pipeline.strategies import propose_strategies
 
@@ -455,10 +512,8 @@ def test_build_ticker_dossiers_corroborates_multi_domain_news() -> None:
     assert quality["independent_source_count"] >= 2
 
 
-def test_validate_narratives_drops_single_source_when_required() -> None:
-    from pipeline.research import validate_narratives
-
-    dossiers = [
+def _single_source_dossiers() -> list[dict]:
+    return [
         {
             "ticker": "ACME",
             "research_quality": {
@@ -487,10 +542,47 @@ def test_validate_narratives_drops_single_source_when_required() -> None:
             ],
         }
     ]
+
+
+def _weak_narrative() -> dict:
+    return {
+        "title": "Weak",
+        "tickers": ["ACME"],
+        "sources": [],
+        "options_plays": [
+            {"direction": "call", "ticker": "ACME", "strike_zone": "calls", "expiry": "weekly", "degen_score": 4}
+        ],
+    }
+
+
+def test_validate_narratives_demotes_single_source_to_low_confidence() -> None:
+    """Default mode: a below-bar thesis with packet support is kept and
+    labeled low confidence rather than silently dropped."""
+    from pipeline.research import validate_narratives
+
     kept, dropped = validate_narratives(
-        [{"title": "Weak", "tickers": ["ACME"], "sources": [], "options_plays": [{"direction": "call", "ticker": "ACME", "strike_zone": "calls", "expiry": "weekly", "degen_score": 4}]}],
-        dossiers,
+        [_weak_narrative()],
+        _single_source_dossiers(),
         require_multi_source=True,
+        demote_single_source=True,
+    )
+    assert dropped == []
+    assert len(kept) == 1
+    quality = kept[0]["research_quality"]
+    assert quality["meets_multi_source_bar"] is False
+    assert "low-confidence" in quality["warning"].lower() or "low confidence" in quality["warning"].lower()
+    # Weak naked-call play still replaced by the deterministic candidate
+    assert kept[0]["options_plays"][0]["strategy_type"] == "debit_call_spread"
+
+
+def test_validate_narratives_drops_single_source_in_strict_mode() -> None:
+    from pipeline.research import validate_narratives
+
+    kept, dropped = validate_narratives(
+        [_weak_narrative()],
+        _single_source_dossiers(),
+        require_multi_source=True,
+        demote_single_source=False,
     )
     assert kept == []
     assert len(dropped) == 1
@@ -498,12 +590,27 @@ def test_validate_narratives_drops_single_source_when_required() -> None:
     assert "multi-source bar" in dropped[0]["reason"]
 
     soft, _ = validate_narratives(
-        [{"title": "Weak", "tickers": ["ACME"], "sources": [], "options_plays": [{"direction": "call", "ticker": "ACME", "strike_zone": "calls", "expiry": "weekly", "degen_score": 4}]}],
-        dossiers,
+        [_weak_narrative()],
+        _single_source_dossiers(),
         require_multi_source=False,
     )
     assert len(soft) == 1
     assert soft[0]["options_plays"][0]["strategy_type"] == "debit_call_spread"
+
+
+def test_validate_narratives_always_drops_no_dossier_theses() -> None:
+    """Demotion never rescues a thesis with zero packet support."""
+    from pipeline.research import validate_narratives
+
+    kept, dropped = validate_narratives(
+        [{"title": "Ghost", "tickers": ["ZZZZ"], "sources": [], "options_plays": []}],
+        _single_source_dossiers(),
+        require_multi_source=True,
+        demote_single_source=True,
+    )
+    assert kept == []
+    assert len(dropped) == 1
+    assert "No research dossier" in dropped[0]["reason"]
 
 
 def _mispriced_lines() -> list[dict]:
@@ -758,6 +865,72 @@ def test_analyze_game_passes_on_efficient_market() -> None:
     assert decision is not None
     assert decision.decision == "pass"
     assert decision.stake_units == 0
+
+
+def _decision(decision: str, ev_pct: float, edge_pct: float = 1.0, book_count: int = 4):
+    from pipeline.sports_strategies import BetDecision
+
+    return BetDecision(
+        event_key=f"evt-{decision}-{ev_pct}",
+        sport_key="basketball_nba",
+        sport_title="NBA",
+        home_team="Home",
+        away_team="Away",
+        matchup="Away @ Home",
+        commence_time=(utc_now() + timedelta(hours=12)).isoformat(),
+        market="h2h",
+        market_label="moneyline",
+        selection="Home",
+        point=None,
+        best_price=110,
+        best_bookmaker="Book",
+        consensus_probability=0.5,
+        implied_probability=0.48,
+        edge_pct=edge_pct,
+        ev_pct=ev_pct,
+        kelly_fraction=0.02,
+        stake_units=1.0 if decision == "bet" else 0.0,
+        decision=decision,
+        confidence=5.0,
+        rationale="test",
+        book_count=book_count,
+    )
+
+
+def test_rank_setups_pushes_bets_then_best_positive_ev_leans() -> None:
+    from pipeline.sports_strategies import rank_setups
+
+    decisions = [
+        _decision("lean", ev_pct=1.2),
+        _decision("pass", ev_pct=-0.5),
+        _decision("bet", ev_pct=2.5),
+        _decision("lean", ev_pct=1.8),
+        _decision("lean", ev_pct=-0.1),  # negative-EV lean must never surface
+    ]
+    setups = rank_setups(decisions, limit=3)
+    assert [s.decision for s in setups] == ["bet", "lean", "lean"]
+    assert setups[1].ev_pct == 1.8
+    assert all(s.ev_pct > 0 for s in setups)
+
+
+def test_build_scan_review_explains_unmet_gates() -> None:
+    from pipeline.sports_strategies import build_scan_review
+
+    decisions = [
+        _decision("lean", ev_pct=1.2, edge_pct=1.0),
+        _decision("pass", ev_pct=-0.5),
+        _decision("lean", ev_pct=0.5, edge_pct=2.0, book_count=2),
+    ]
+    review = build_scan_review(decisions, games_without_pricing=2)
+    assert review["games_analyzed"] == 3
+    assert review["games_without_pricing"] == 2
+    assert review["decisions"] == {"bet": 0, "lean": 2, "pass": 1}
+    assert review["thresholds"]["min_edge_pct"] > 0
+
+    by_ev = {c["ev_pct"]: c for c in review["closest_candidates"]}
+    assert "below" in by_ev[1.2]["why_not_bet"]
+    assert "negative EV" in by_ev[-0.5]["why_not_bet"]
+    assert "book" in by_ev[0.5]["why_not_bet"]
 
 
 def test_kelly_fraction_positive_only_with_edge() -> None:
