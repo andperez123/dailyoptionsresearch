@@ -91,6 +91,7 @@ class SportsBetDecision(BaseModel):
     research_checklist: list[str] = Field(default_factory=list)
     line_movement_note: Optional[str] = None
     news_support_count: int = 0
+    book_count: int = 0
 
 
 class SportsAngle(BaseModel):
@@ -357,6 +358,14 @@ class SportsBoardResponse(BaseModel):
     quota_remaining: Optional[int] = None
     quota_used: Optional[int] = None
     best_bets: list[SportsBetDecision] = Field(default_factory=list)
+    # Always-populated recommendation tier: confirmed bets first, then the
+    # highest-EV leans, so the board pushes the best available setups even
+    # when nothing clears the full BET bar.
+    top_setups: list[SportsBetDecision] = Field(default_factory=list)
+    # Complete review of what the scan analyzed (thresholds, decision counts,
+    # closest candidates with the gates they missed) — shown when no setup
+    # qualifies so an empty board still explains itself.
+    scan_review: dict[str, Any] = Field(default_factory=dict)
     bet_horizon_days: int = 3
 
 
