@@ -394,15 +394,28 @@ def validate_narratives(
     dossiers: list[dict[str, Any]],
     *,
     require_multi_source: bool | None = None,
+    demote_single_source: bool | None = None,
     options: list[OptionsSnapshot] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Attach research_quality, prefer multi-source, drop single-source weak
-    theses. Returns (kept, dropped) where each dropped entry records the
-    title, tickers, and the reason it was rejected."""
+    """Attach research_quality and enforce sourcing standards.
+
+    Narratives with no dossier at all (no packet support — hallucination
+    risk) are always dropped under the hard gate. Narratives that have
+    packet support but miss the multi-source bar are, by default, kept and
+    clearly labeled low-confidence instead of dropped — the reader gets the
+    analysis plus an honest quality flag rather than silence.
+
+    Returns (kept, dropped) where each dropped entry records the title,
+    tickers, and the reason it was rejected."""
     hard_gate = (
         settings.require_multi_source_narratives
         if require_multi_source is None
         else require_multi_source
+    )
+    demote = (
+        settings.demote_single_source_narratives
+        if demote_single_source is None
+        else demote_single_source
     )
     dossier_by_ticker = {d["ticker"]: d for d in dossiers}
     snapshot_by_ticker = {o.ticker.upper(): o for o in options or []}
@@ -499,13 +512,17 @@ def validate_narratives(
             raw["options_plays"] = kept_plays[:3]
 
         if hard_gate and not meets:
-            _drop(
-                raw,
+            reason = (
                 f"Failed multi-source bar: {independent} independent source(s), "
                 f"{len(news_domains)} news domain(s); need "
-                f"{settings.min_independent_sources}+ sources incl. 1 news domain",
+                f"{settings.min_independent_sources}+ sources incl. 1 news domain"
             )
-            continue
+            if not demote:
+                _drop(raw, reason)
+                continue
+            raw["research_quality"]["warning"] = (
+                "Multi-source bar not met — low-confidence thesis; verify before acting"
+            )
 
         validated.append(raw)
 

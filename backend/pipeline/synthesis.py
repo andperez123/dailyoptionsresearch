@@ -200,7 +200,11 @@ def build_stock_research_packet(
             "min_independent_sources": settings.min_independent_sources,
             "require_multi_source_narratives": settings.require_multi_source_narratives,
             "rules": [
-                "Only write full narratives for tickers with multi-source dossiers (meets_multi_source_bar=true).",
+                "Prioritize tickers with multi-source dossiers (meets_multi_source_bar=true). "
+                "When few or none qualify, still write the best-supported narratives from the "
+                "available dossiers and be explicit that sourcing is thinner (lower degen "
+                "score, honest confidence framing). Never invent a thesis for a ticker with "
+                "no dossier at all.",
                 "Insight must synthesize across sources — never rewrite a single headline.",
                 "Prefer strategy_candidates from dossiers over naked long calls/puts.",
                 "Use only recent packet data for 'why now'; flag stale claims.",
@@ -237,6 +241,12 @@ def build_sports_research_packet(
                 "(vig-removed consensus vs best available price).",
                 "Sports angles MUST be built around engine_bet_decisions when present — "
                 "lead with the pick, then the story behind it.",
+                "Decisions come in three grades: 'bet' (cleared every gate), 'lean' "
+                "(positive expected value that missed a gate — still a real, actionable "
+                "setup to watch at the stated number), and 'pass'. Cover the bets first, "
+                "then the highest-EV leans. Always take a stance on the best available "
+                "setups; reserve 'nothing here' for slates where no outcome shows "
+                "positive EV.",
                 "Never invent odds, edges, or picks not present in engine_bet_decisions "
                 "or ranked_odds_events.",
             ],
@@ -253,8 +263,15 @@ Write source-grounded daily briefings for a research terminal — not trade pick
 
 Hard rules:
 - Output ONLY valid JSON matching the schema exactly.
-- Stock narratives MUST be grounded in ticker_dossiers with meets_multi_source_bar=true.
-- Every narrative needs ≥2 independent sources (different domains/providers). Cite real URLs.
+- Stock narratives MUST be grounded in ticker_dossiers. Prioritize dossiers with
+  meets_multi_source_bar=true; when few or none qualify, write the best-supported
+  narratives from the available dossiers anyway and be explicit about the thinner
+  sourcing (lower degen score, honest confidence framing). Never invent a thesis
+  for a ticker that has no dossier.
+- Cite real URLs; aim for ≥2 independent sources (different domains/providers) and
+  say so plainly when only one exists.
+- Always deliver analysis. An empty narratives or sports_angles list is a last
+  resort for genuinely empty packets — not a response to imperfect data.
 - The "insight" field must be a non-obvious synthesis across sources + market/options data —
   NEVER a paraphrase of a single headline.
 - Separate observations (what sources say) from inference (your synthesis).
@@ -268,6 +285,9 @@ Hard rules:
   state the decision (selection, market, price, stake) in line_note, then narrate
   the supporting story and what would confirm or invalidate the number.
   Take a stance — the reader wants a decision, not a survey.
+- A "lean" engine decision is a real setup: positive expected value that missed a
+  secondary gate. Cover the best leans as actionable angles (with the caveat that
+  they missed the full bet bar) rather than skipping them.
 - why_now must use today's fresh packet data (age within research_contract max hours).
 - Degen score 1 = conservative, 5 = speculative. Include risk framing.
 - ongoing_narratives are storylines tracked from previous days. When a narrative
@@ -363,8 +383,10 @@ Return JSON with this exact structure:
   ]
 }}
 
-Produce 2-5 multi-source narratives (quality over quantity), 2-4 sports angles, and 3-8 radar items.
-Single-source buzz belongs on radar, not as a full narrative."""
+Produce 3-5 narratives, 2-4 sports angles, and 3-8 radar items. Lead with multi-source
+narratives; when few tickers meet the bar, still cover the best-supported dossiers with
+honest confidence framing instead of returning fewer than 2 narratives. Pure buzz with no
+sources at all belongs on radar."""
 
 
 def _normalize_matchup(value: str) -> str:
@@ -665,8 +687,16 @@ async def synthesize_briefing(
         options=options,
     )
     low_confidence_fallback = False
-    if not data["narratives"] and raw_narratives and settings.require_multi_source_narratives:
-        # Thin corroboration day — keep narratives but mark low confidence
+    if (
+        not data["narratives"]
+        and raw_narratives
+        and settings.require_multi_source_narratives
+        and not settings.demote_single_source_narratives
+    ):
+        # Legacy fallback for the drop-below-bar mode: keep narratives but
+        # mark low confidence rather than blanking the briefing. When
+        # demotion is enabled this never triggers — below-bar theses are
+        # already kept (labeled), and no-dossier theses should stay dropped.
         low_confidence_fallback = True
         data["narratives"], _ = validate_narratives(
             raw_narratives, dossiers, require_multi_source=False, options=options
@@ -676,9 +706,15 @@ async def synthesize_briefing(
             rq["warning"] = "Multi-source bar not met — thesis marked low confidence"
             rq["meets_multi_source_bar"] = False
     dropped = before_count - len(data["narratives"])
+    low_confidence_count = sum(
+        1
+        for n in data["narratives"]
+        if not (n.get("research_quality") or {}).get("meets_multi_source_bar", False)
+    )
     if report is not None:
         report.set("raw_narrative_count", before_count)
         report.set("validated_narrative_count", len(data["narratives"]))
+        report.set("low_confidence_narratives", low_confidence_count)
         report.set("narratives_dropped", dropped_reasons if not low_confidence_fallback else [])
         report.set("low_confidence_fallback", low_confidence_fallback)
         report.set("llm_api_mode", api_mode)
