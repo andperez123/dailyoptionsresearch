@@ -19,9 +19,11 @@ from pipeline.sports_news import attach_news_to_events, collect_sports_news, fee
 from pipeline.sports_strategies import (
     DECISION_BET,
     analyze_game,
+    build_scan_review,
     decision_to_dict,
     event_key_for,
     finalize_decisions,
+    rank_setups,
     within_bet_horizon,
 )
 from time_utils import parse_datetime, utc_now
@@ -116,6 +118,8 @@ async def build_sports_board(
 
     games: list[SportsGameCard] = []
     featured: set[str] = set()
+    engine_decisions: list = []
+    games_without_pricing = 0
 
     for item in ranked_events:
         sport = item.get("sport_key", "")
@@ -138,7 +142,10 @@ async def build_sports_board(
         lines: list[SportsOddsLine] = []
         line_dicts: list[dict[str, Any]] = []
 
-        for bookmaker in item.get("bookmakers", [])[: settings.odds_max_bookmakers_briefing]:
+        # Full book depth feeds the decision engine — the cross-book edge
+        # model needs every quote it can get; a 3-book sample structurally
+        # starves it (the leave-one-out consensus collapses to 2 books).
+        for bookmaker in item.get("bookmakers", [])[: settings.odds_max_bookmakers_decision]:
             for market in bookmaker.get("markets", []):
                 outcomes = [
                     {"name": o.get("name"), "price": o.get("price"), "point": o.get("point")}
@@ -206,6 +213,9 @@ async def build_sports_board(
         )
         if decision:
             decision = (await finalize_decisions([decision]))[0]
+            engine_decisions.append(decision)
+        else:
+            games_without_pricing += 1
         bet_decision = (
             SportsBetDecision.model_validate(decision_to_dict(decision)) if decision else None
         )
@@ -252,6 +262,13 @@ async def build_sports_board(
         (g.bet_decision for g in games if g.bet_decision and g.bet_decision.decision == DECISION_BET),
         key=lambda d: -d.ev_pct,
     )
+    top_setups = [
+        SportsBetDecision.model_validate(decision_to_dict(d))
+        for d in rank_setups(engine_decisions)
+    ]
+    scan_review = build_scan_review(
+        engine_decisions, games_without_pricing=games_without_pricing
+    )
 
     quota = get_last_odds_quota()
     board = SportsBoardResponse(
@@ -263,6 +280,8 @@ async def build_sports_board(
         quota_remaining=quota.remaining,
         quota_used=quota.used,
         best_bets=best_bets,
+        top_setups=top_setups,
+        scan_review=scan_review,
         bet_horizon_days=settings.sports_bet_horizon_days,
     )
     _cached_board = board

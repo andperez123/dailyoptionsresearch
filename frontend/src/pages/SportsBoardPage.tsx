@@ -1,8 +1,60 @@
 import { useEffect, useMemo, useState } from 'react'
 import { getSports, getSportsRecord } from '../api'
-import type { SportsBetRecordResponse, SportsBoardResponse, SportsGameCard } from '../types'
+import type {
+  SportsBetRecordResponse,
+  SportsBoardResponse,
+  SportsGameCard,
+  SportsScanReview,
+} from '../types'
 import { formatTime } from '../lib/format'
 import { BetDecisionBadge, BetDecisionPanel } from '../components/BetDecisionPanel'
+
+function ScanReviewPanel({ review }: { review: SportsScanReview }) {
+  return (
+    <section className="mb-8 rounded-2xl bg-research-surface px-5 py-4 shadow-soft">
+      <h2 className="text-sm font-semibold uppercase tracking-wide text-research-muted">
+        No qualified setups this scan — full research review
+      </h2>
+      <p className="mt-2 text-sm leading-6 text-research-ink">
+        Analyzed {review.games_analyzed} game{review.games_analyzed === 1 ? '' : 's'} with pricing
+        ({review.decisions.bet} bet · {review.decisions.lean} lean · {review.decisions.pass} pass
+        {review.games_without_pricing > 0
+          ? ` · ${review.games_without_pricing} without usable pricing`
+          : ''}
+        ). Bet bar: edge ≥ {review.thresholds.min_edge_pct} pts, EV ≥ {review.thresholds.min_ev_pct}
+        %, ≥ {review.thresholds.min_books} books, within {review.thresholds.horizon_days} days.
+      </p>
+      {review.closest_candidates.length > 0 && (
+        <div className="mt-3 space-y-2">
+          <p className="text-xs font-semibold uppercase tracking-wide text-research-muted">
+            Closest candidates
+          </p>
+          {review.closest_candidates.map((c) => (
+            <div
+              key={`${c.matchup}-${c.market_label}-${c.selection}`}
+              className="rounded-2xl bg-research-bg px-4 py-2.5 text-sm"
+            >
+              <p className="font-medium text-research-ink">
+                {c.matchup}
+                <span className="ml-2 font-mono text-xs tabular-nums text-research-muted">
+                  {c.selection}
+                  {c.point != null ? ` ${c.point}` : ''} {c.market_label}{' '}
+                  {c.best_price > 0 ? '+' : ''}
+                  {c.best_price} @ {c.best_bookmaker}
+                </span>
+              </p>
+              <p className="mt-0.5 text-xs text-research-muted">
+                EV {c.ev_pct >= 0 ? '+' : ''}
+                {c.ev_pct.toFixed(1)}% · edge {c.edge_pct >= 0 ? '+' : ''}
+                {c.edge_pct.toFixed(1)} pts · {c.book_count} books — {c.why_not_bet}
+              </p>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  )
+}
 
 const STATUS_COLORS: Record<string, string> = {
   won: 'text-research-green',
@@ -234,6 +286,11 @@ export function SportsBoardPage() {
     return Array.from(new Set(board.games.map((g) => g.sport_key || g.sport))).sort()
   }, [board])
 
+  const topSetups = useMemo(() => {
+    if (!board) return []
+    return board.top_setups?.length ? board.top_setups : board.best_bets
+  }, [board])
+
   const visibleGames = useMemo(() => {
     if (!board) return []
     let games = [...board.games]
@@ -313,13 +370,13 @@ export function SportsBoardPage() {
 
       {record && <TrackRecordStrip record={record} />}
 
-      {board.best_bets.length > 0 && (
+      {topSetups.length > 0 ? (
         <section className="mb-8">
           <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-research-muted">
-            Best bets · next {board.bet_horizon_days} days
+            Top setups · next {board.bet_horizon_days} days
           </h2>
           <div className="space-y-3">
-            {board.best_bets.map((bet) => (
+            {topSetups.map((bet) => (
               <div key={`${bet.event_key}-${bet.market}-${bet.selection}`}>
                 <p className="mb-1.5 text-sm font-semibold text-research-ink">
                   {bet.matchup}
@@ -332,6 +389,8 @@ export function SportsBoardPage() {
             ))}
           </div>
         </section>
+      ) : (
+        board.scan_review && <ScanReviewPanel review={board.scan_review} />
       )}
 
       {board.featured_competitions.length > 0 && (
