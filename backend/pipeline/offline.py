@@ -139,16 +139,23 @@ def build_deterministic_briefing(
         if dossier.get("mention_count", 0) < 1 and not dossier.get("sources"):
             continue
         quality = dossier.get("research_quality") or {}
+        if quality.get("meets_multi_source_bar"):
+            note = (
+                f"Well-sourced ({quality.get('news_domain_count', 0)} news domains) — "
+                "cut for narrative count, still worth a look"
+            )
+        else:
+            note = (
+                f"{quality.get('independent_source_count', 0)} independent source(s), "
+                f"{quality.get('news_domain_count', 0)} news domain(s) — "
+                "not enough for a full story yet"
+            )
         radar.append(
             {
                 "ticker": dossier["ticker"],
                 "buzz_delta": dossier.get("buzz_delta", 0.0),
                 "mention_count": dossier.get("mention_count", 0),
-                "note": (
-                    f"{quality.get('independent_source_count', 0)} independent source(s), "
-                    f"{quality.get('news_domain_count', 0)} news domain(s) — "
-                    "not enough for a full story yet"
-                ),
+                "note": note,
             }
         )
 

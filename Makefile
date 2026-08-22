@@ -1,4 +1,4 @@
-.PHONY: setup dev research build frontend-install backend-install seed worker catalyst
+.PHONY: setup dev research backfill build frontend-install backend-install seed worker catalyst
 
 VENV := .venv
 PYTHON := $(VENV)/bin/python
@@ -23,6 +23,9 @@ worker:
 
 research:
 	cd backend && ../$(PYTHON) run_research.py
+
+backfill:
+	cd backend && ../$(PYTHON) backfill.py --days 7 --export-dir ../reports
 
 catalyst:
 	cd backend && ../$(PYTHON) -c "import asyncio; from pipeline.catalyst import run_catalyst_scan; print(asyncio.run(run_catalyst_scan()))"

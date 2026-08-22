@@ -12,9 +12,8 @@ import logging
 from datetime import date, timedelta
 from typing import Any
 
-import yfinance as yf
-
 from pipeline.options import OptionsSnapshot
+from pipeline.prices import close_pair, fetch_daily_closes
 
 logger = logging.getLogger(__name__)
 
@@ -23,34 +22,21 @@ INDEX_SYMBOLS = ["SPY", "QQQ", "IWM", "^VIX"]
 
 def _index_tape(as_of: date | None) -> list[dict[str, Any]]:
     end = (as_of or date.today()) + timedelta(days=1)
-    start = end - timedelta(days=14)
-    data = yf.download(
-        INDEX_SYMBOLS,
-        start=start.isoformat(),
-        end=end.isoformat(),
-        progress=False,
-        auto_adjust=True,
-        threads=True,
-    )
-    closes = (data["Close"] if "Close" in data else data).dropna(how="all")
-    if as_of is not None:
-        closes = closes[closes.index.date <= as_of]
-    if len(closes) < 2:
-        return []
-    last, prev = closes.iloc[-1], closes.iloc[-2]
+    start = end - timedelta(days=21)
+    all_series = fetch_daily_closes(INDEX_SYMBOLS, start, end)
     tape: list[dict[str, Any]] = []
     for symbol in INDEX_SYMBOLS:
-        try:
-            p_last, p_prev = float(last[symbol]), float(prev[symbol])
-        except (KeyError, TypeError, ValueError):
+        pair = close_pair(all_series.get(symbol, []), as_of)
+        if pair is None:
             continue
-        if p_last != p_last or p_prev != p_prev or p_prev <= 0:  # NaN guards
+        last, prev = pair
+        if prev <= 0:
             continue
         tape.append(
             {
                 "symbol": symbol.lstrip("^"),
-                "price": round(p_last, 2),
-                "pct_change": round((p_last - p_prev) / p_prev * 100, 2),
+                "price": round(last, 2),
+                "pct_change": round((last - prev) / prev * 100, 2),
             }
         )
     return tape

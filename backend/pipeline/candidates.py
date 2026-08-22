@@ -24,9 +24,8 @@ from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import Any
 
-import yfinance as yf
-
 from config import settings
+from pipeline.prices import close_pair, fetch_daily_closes
 
 logger = logging.getLogger(__name__)
 
@@ -59,34 +58,16 @@ def _pct_moves_from_history(as_of: date | None) -> dict[str, float]:
     """Batched close-to-close % moves for the core list. When `as_of` is set
     (backfill), the move is computed for that session instead of the latest."""
     end = (as_of + timedelta(days=1)) if as_of else date.today() + timedelta(days=1)
-    start = end - timedelta(days=14)
-    data = yf.download(
-        CORE_LIQUID_TICKERS,
-        start=start.isoformat(),
-        end=end.isoformat(),
-        progress=False,
-        auto_adjust=True,
-        threads=True,
-    )
-    closes = data["Close"] if "Close" in data else data
-    closes = closes.dropna(how="all")
-    if len(closes) < 2:
-        return {}
-    if as_of is not None:
-        eligible = closes[closes.index.date <= as_of]
-        if len(eligible) < 2:
-            return {}
-        last, prev = eligible.iloc[-1], eligible.iloc[-2]
-    else:
-        last, prev = closes.iloc[-1], closes.iloc[-2]
+    start = end - timedelta(days=21)
+    all_series = fetch_daily_closes(CORE_LIQUID_TICKERS, start, end)
     moves: dict[str, float] = {}
-    for ticker in closes.columns:
-        try:
-            p_last, p_prev = float(last[ticker]), float(prev[ticker])
-        except (KeyError, TypeError, ValueError):
+    for ticker, series in all_series.items():
+        pair = close_pair(series, as_of)
+        if pair is None:
             continue
-        if p_prev > 0 and p_last == p_last and p_prev == p_prev:  # NaN guards
-            moves[str(ticker)] = round((p_last - p_prev) / p_prev * 100, 2)
+        last, prev = pair
+        if prev > 0:
+            moves[ticker] = round((last - prev) / prev * 100, 2)
     return moves
 
 
