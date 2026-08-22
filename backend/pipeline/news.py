@@ -136,10 +136,18 @@ def match_tickers_in_text(
     watchlist: list[str],
     names: dict[str, str] | None = None,
 ) -> list[str]:
+    from pipeline.tickers import COMMON_WORDS
+
     haystack = text.lower()
     matched: list[str] = []
     for ticker in watchlist:
-        if re.search(rf"\$?{re.escape(ticker.lower())}\b", haystack):
+        # Tickers that are also common words only match as $CASHTAGS or via
+        # their company name, never as the bare word.
+        if ticker.upper() in COMMON_WORDS:
+            symbol_pattern = rf"\${re.escape(ticker.lower())}\b"
+        else:
+            symbol_pattern = rf"\$?{re.escape(ticker.lower())}\b"
+        if re.search(symbol_pattern, haystack):
             matched.append(ticker)
             continue
         aliases = list(COMPANY_ALIASES.get(ticker, []))

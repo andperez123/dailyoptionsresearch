@@ -13,7 +13,20 @@ from pipeline.news import NewsItem
 from pipeline.options import OptionsSnapshot
 from pipeline.reddit import RedditPost
 from pipeline.strategies import propose_strategies, proposals_to_play_dicts
+from pipeline.tickers import COMMON_WORDS
 from time_utils import parse_rss_datetime, utc_now
+
+
+def _ticker_in_text(ticker: str, text_upper: str, name: str = "") -> bool:
+    """Symbol match that won't fire on plain English: tickers that are also
+    common words (BY, ON, ALL...) only match as $CASHTAGS or via their
+    company name — `\\bBY\\b` would otherwise match every headline containing
+    the word 'by'."""
+    if ticker in COMMON_WORDS:
+        if re.search(rf"\${ticker}\b", text_upper):
+            return True
+        return bool(name) and len(name) >= 3 and name.upper() in text_upper
+    return bool(re.search(rf"\${ticker}\b|\b{ticker}\b", text_upper))
 
 # Conviction tiers replace the old hard multi-source gate. Narratives are
 # never silently deleted for thin sourcing — they are labeled so the reader
@@ -176,7 +189,7 @@ def build_ticker_dossiers(
         title_upper = item.title.upper()
         title_lower = item.title.lower()
         for t in ticker_set:
-            if re.search(rf"\${t}\b|\b{t}\b", title_upper):
+            if _ticker_in_text(t, title_upper, names.get(t, "")):
                 related.append(t)
                 continue
             name = (names.get(t) or "").lower()
@@ -190,7 +203,7 @@ def build_ticker_dossiers(
     for post in finance_posts:
         blob = f"{post.title} {post.selftext or ''}".upper()
         for t in tickers:
-            if re.search(rf"\${t.upper()}\b|\b{t.upper()}\b", blob):
+            if _ticker_in_text(t.upper(), blob, names.get(t.upper(), "")):
                 posts_by_ticker[t.upper()].append(post)
 
     cats_by_ticker: dict[str, list[dict[str, Any]]] = defaultdict(list)
