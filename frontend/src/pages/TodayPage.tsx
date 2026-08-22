@@ -10,6 +10,7 @@ import {
 import { CatalystCalendarStrip } from '../components/CatalystCalendarStrip'
 import { CatalystWire } from '../components/CatalystWire'
 import { DeepDiveDrawer } from '../components/DeepDiveDrawer'
+import { MarketDashboard } from '../components/MarketDashboard'
 import { NarrativeCard } from '../components/NarrativeCard'
 import { RadarSidebar } from '../components/RadarSidebar'
 import { RunReportPanel } from '../components/RunReportPanel'
@@ -168,6 +169,13 @@ export function TodayPage() {
             </div>
           ) : (
             <>
+              {briefing.content.market_dashboard && (
+                <MarketDashboard
+                  dashboard={briefing.content.market_dashboard}
+                  onTickerClick={setSelectedTicker}
+                />
+              )}
+
               <section className="rounded-2xl bg-research-surface px-4 shadow-soft sm:px-5">
                 {briefing.content.narratives.length === 0 ? (
                   <div className="px-2 py-10 text-center">

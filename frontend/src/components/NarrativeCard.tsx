@@ -14,10 +14,18 @@ function formatStrategy(play: OptionsPlay): string {
   return play.direction
 }
 
+const tierStyles: Record<string, string> = {
+  confirmed: 'bg-research-green-soft text-research-green',
+  developing: 'bg-research-amber-soft text-research-amber',
+  watch: 'bg-research-bg text-research-muted',
+}
+
 export function NarrativeCard({ narrative, threadDay }: NarrativeCardProps) {
   const [open, setOpen] = useState(false)
   const quality = narrative.research_quality
-  const multiSource = quality?.meets_multi_source_bar
+  const tier =
+    quality?.conviction_tier ??
+    (quality?.meets_multi_source_bar ? 'confirmed' : quality?.warning ? 'watch' : undefined)
   const threadStatus = narrative.thread_update?.status
 
   return (
@@ -37,19 +45,15 @@ export function NarrativeCard({ narrative, threadDay }: NarrativeCardProps) {
                 ${t}
               </span>
             ))}
-            {quality && (
+            {quality && tier && (
               <span
                 className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
-                  multiSource
-                    ? 'bg-research-green-soft text-research-green'
-                    : 'bg-research-bg text-research-muted'
+                  tierStyles[tier] ?? tierStyles.watch
                 }`}
               >
-                {multiSource
-                  ? `${quality.independent_source_count ?? 0} sources`
-                  : quality.warning
-                    ? 'low confidence'
-                    : 'forming'}
+                {tier === 'confirmed'
+                  ? `confirmed · ${quality.independent_source_count ?? 0} sources`
+                  : tier}
               </span>
             )}
             {(threadDay ?? 0) > 1 && (

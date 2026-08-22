@@ -38,6 +38,7 @@ export interface ResearchQuality {
   source_types?: string[]
   corroborated_claim_count?: number
   meets_multi_source_bar?: boolean
+  conviction_tier?: 'confirmed' | 'developing' | 'watch'
   warning?: string
   dossier_tickers?: string[]
 }
@@ -167,11 +168,58 @@ export interface RadarItem {
   note: string
 }
 
+export interface IndexTapeEntry {
+  symbol: string
+  price: number
+  pct_change: number
+}
+
+export interface DashboardMover {
+  ticker: string
+  price: number | null
+  pct_change: number | null
+}
+
+export interface DashboardIvExtreme {
+  ticker: string
+  iv_rank: number
+  atm_iv: number | null
+  regime: string | null
+  read: string
+}
+
+export interface DashboardFlow {
+  ticker: string
+  put_call_ratio: number
+  read: string
+}
+
+export interface DashboardEarnings {
+  ticker: string
+  date: string
+}
+
+export interface DashboardBuzz {
+  ticker: string
+  buzz_z: number
+  mentions: number
+}
+
+export interface MarketDashboardData {
+  indices?: IndexTapeEntry[]
+  watchlist_movers?: DashboardMover[]
+  iv_extremes?: DashboardIvExtreme[]
+  unusual_flow?: DashboardFlow[]
+  earnings_ahead?: DashboardEarnings[]
+  buzz_leaders?: DashboardBuzz[]
+}
+
 export interface BriefingContent {
   summary: string
   narratives: Narrative[]
   sports_angles: SportsAngle[]
   radar: RadarItem[]
+  market_dashboard?: MarketDashboardData
   generated_at: string
   raw_stats: Record<string, unknown>
   research_metadata?: Record<string, unknown>
@@ -406,6 +454,8 @@ export interface DossierVerdict {
   newest_source_age_hours: number | null
   strategy_candidates: number
   meets_multi_source_bar: boolean
+  conviction_tier?: 'confirmed' | 'developing' | 'watch'
+  candidate_sources?: string[]
   fail_reason: string
 }
 
