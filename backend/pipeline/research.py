@@ -15,6 +15,13 @@ from pipeline.reddit import RedditPost
 from pipeline.strategies import propose_strategies, proposals_to_play_dicts
 from time_utils import parse_rss_datetime, utc_now
 
+# Conviction tiers replace the old hard multi-source gate. Narratives are
+# never silently deleted for thin sourcing — they are labeled so the reader
+# can calibrate, and only dossier-less (unsupported) theses get dropped.
+TIER_CONFIRMED = "confirmed"    # multi-source bar met
+TIER_DEVELOPING = "developing"  # at least one real news domain, not yet corroborated
+TIER_WATCH = "watch"            # chatter/technicals only
+
 
 def _domain(url: str) -> str:
     try:
@@ -22,6 +29,12 @@ def _domain(url: str) -> str:
         return host[4:] if host.startswith("www.") else host
     except Exception:
         return ""
+
+
+def _news_domain(item: NewsItem) -> str:
+    """Real publisher domain — Google News URLs all resolve to
+    news.google.com, which must not count as a distinct source."""
+    return getattr(item, "publisher_domain", "") or _domain(item.url)
 
 
 def _parse_published(value: str | datetime | None) -> Optional[datetime]:
@@ -35,21 +48,100 @@ def _parse_published(value: str | datetime | None) -> Optional[datetime]:
         return None
 
 
-def _is_fresh(published: str | datetime | None, max_age_hours: int) -> bool:
+def _is_fresh(
+    published: str | datetime | None,
+    max_age_hours: int,
+    now: datetime | None = None,
+) -> bool:
     dt = _parse_published(published)
     if dt is None:
         return True
-    now = utc_now()
+    reference = now or utc_now()
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=now.tzinfo)
-    return (now - dt) <= timedelta(hours=max_age_hours)
+        dt = dt.replace(tzinfo=reference.tzinfo)
+    return (reference - dt) <= timedelta(hours=max_age_hours)
 
 
-def _normalize_claim_key(text: str) -> str:
-    words = re.sub(r"[^a-z0-9 ]", "", text.lower()).split()
-    stop = {"the", "a", "an", "and", "or", "to", "of", "in", "on", "for", "with", "after", "as"}
-    keep = [w for w in words if w not in stop and len(w) > 2]
-    return " ".join(sorted(set(keep))[:8])
+_CLAIM_STOPWORDS = {
+    "the", "a", "an", "and", "or", "to", "of", "in", "on", "for", "with",
+    "after", "as", "is", "are", "was", "be", "at", "by", "its", "it",
+    "from", "this", "that", "has", "have", "will", "says", "say", "said",
+    "stock", "stocks", "shares", "share", "price", "market", "markets",
+    "today", "new", "report", "reports", "reported", "amid", "over", "into",
+    "why", "how", "what", "could", "may", "might", "up", "down", "more",
+}
+
+
+def _claim_tokens(text: str) -> set[str]:
+    words = re.sub(r"[^a-z0-9 ]", "", (text or "").lower()).split()
+    return {w for w in words if w not in _CLAIM_STOPWORDS and len(w) > 2}
+
+
+def _jaccard(a: set[str], b: set[str]) -> float:
+    if not a or not b:
+        return 0.0
+    return len(a & b) / len(a | b)
+
+
+# Two different headlines about the same event share most substantive tokens
+# but rarely all of them — exact keyword-set matching (the old approach)
+# almost never fired, so corroboration was structurally broken.
+_CLAIM_SIMILARITY_THRESHOLD = 0.35
+
+
+def cluster_claims(
+    entries: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Greedy single-pass clustering of claim entries by token overlap.
+
+    Each entry: {"title": str, "domain": str, "url": str, "weight": int}.
+    Returns corroborated clusters (2+ distinct domains or 2+ weighted
+    mentions), strongest first."""
+    clusters: list[dict[str, Any]] = []
+    for entry in entries:
+        tokens = _claim_tokens(entry.get("title", ""))
+        if not tokens:
+            continue
+        best = None
+        best_score = 0.0
+        for cluster in clusters:
+            score = _jaccard(tokens, cluster["tokens"])
+            if score > best_score:
+                best_score = score
+                best = cluster
+        if best is not None and best_score >= _CLAIM_SIMILARITY_THRESHOLD:
+            best["tokens"] |= tokens
+            if entry.get("domain"):
+                best["domains"].add(entry["domain"])
+            if entry.get("url"):
+                best["urls"].append(entry["url"])
+            best["count"] += int(entry.get("weight") or 1)
+        else:
+            clusters.append(
+                {
+                    "claim": entry.get("title", ""),
+                    "tokens": set(tokens),
+                    "domains": {entry["domain"]} if entry.get("domain") else set(),
+                    "urls": [entry["url"]] if entry.get("url") else [],
+                    "count": int(entry.get("weight") or 1),
+                }
+            )
+
+    corroborated = []
+    for cluster in clusters:
+        domain_count = len(cluster["domains"])
+        if domain_count >= 2 or cluster["count"] >= 2:
+            corroborated.append(
+                {
+                    "claim": cluster["claim"],
+                    "independent_domains": sorted(cluster["domains"]),
+                    "domain_count": domain_count,
+                    "mention_count": cluster["count"],
+                    "urls": cluster["urls"][:4],
+                }
+            )
+    corroborated.sort(key=lambda c: (-c["domain_count"], -c["mention_count"]))
+    return corroborated
 
 
 def build_ticker_dossiers(
@@ -62,26 +154,36 @@ def build_ticker_dossiers(
     buzz_deltas: dict[str, float],
     macro_context: list[dict[str, Any]] | None = None,
     max_age_hours: int | None = None,
+    ticker_names: dict[str, str] | None = None,
+    now: datetime | None = None,
+    candidate_sources: dict[str, list[str]] | None = None,
 ) -> list[dict[str, Any]]:
     """Build per-ticker multi-source research packets with corroboration metrics."""
     max_age = max_age_hours if max_age_hours is not None else settings.briefing_news_max_age_hours
     options_by_ticker = {o.ticker.upper(): o for o in options}
+    names = ticker_names or {}
     dossiers: list[dict[str, Any]] = []
 
+    ticker_set = {t.upper() for t in tickers}
     news_by_ticker: dict[str, list[NewsItem]] = defaultdict(list)
     for item in news:
-        if not _is_fresh(item.published, max_age):
+        if not _is_fresh(item.published, max_age, now=now):
             continue
         related = []
         if item.ticker:
             related.append(item.ticker.upper())
-        # Also attach if ticker appears in title for watchlist names
+        # Also attach when the symbol or the company name appears in the title
         title_upper = item.title.upper()
-        for t in tickers:
-            if t.upper() in title_upper or f"${t.upper()}" in title_upper:
-                related.append(t.upper())
+        title_lower = item.title.lower()
+        for t in ticker_set:
+            if re.search(rf"\${t}\b|\b{t}\b", title_upper):
+                related.append(t)
+                continue
+            name = (names.get(t) or "").lower()
+            if name and len(name) >= 3 and name in title_lower:
+                related.append(t)
         for t in set(related):
-            if t in {x.upper() for x in tickers}:
+            if t in ticker_set:
                 news_by_ticker[t].append(item)
 
     posts_by_ticker: dict[str, list[RedditPost]] = defaultdict(list)
@@ -96,16 +198,16 @@ def build_ticker_dossiers(
         primary = (cat.get("primary_ticker") or "").upper()
         related = [str(x).upper() for x in cat.get("related_tickers") or []]
         for t in {primary, *related}:
-            if t and t in {x.upper() for x in tickers}:
+            if t and t in ticker_set:
                 cats_by_ticker[t].append(cat)
 
     for ticker in tickers:
         t = ticker.upper()
         sources: list[dict[str, Any]] = []
-        claim_map: dict[str, dict[str, Any]] = {}
+        claim_entries: list[dict[str, Any]] = []
 
         for item in news_by_ticker.get(t, [])[:12]:
-            domain = _domain(item.url) or item.source or "news"
+            domain = _news_domain(item) or item.source or "news"
             source_type = getattr(item, "source_tier", None) or "news"
             if source_type == "rss":
                 source_type = "news"
@@ -121,15 +223,9 @@ def build_ticker_dossiers(
                 "summary": summary[:500] if summary and summary != item.title else "",
             }
             sources.append(entry)
-            key = _normalize_claim_key(item.title)
-            if key:
-                bucket = claim_map.setdefault(
-                    key,
-                    {"claim": item.title, "domains": set(), "urls": [], "count": 0},
-                )
-                bucket["domains"].add(domain)
-                bucket["urls"].append(item.url)
-                bucket["count"] += 1
+            claim_entries.append(
+                {"title": item.title, "domain": domain, "url": item.url, "weight": 1}
+            )
 
         for post in posts_by_ticker.get(t, [])[:6]:
             sources.append(
@@ -147,12 +243,13 @@ def build_ticker_dossiers(
             )
 
         for cat in cats_by_ticker.get(t, [])[:6]:
+            cat_domain = _domain(cat.get("source_url") or "") or "catalyst"
             sources.append(
                 {
                     "title": cat.get("headline") or cat.get("thesis") or "catalyst",
                     "url": cat.get("source_url") or "",
                     "source": cat.get("source_name") or "catalyst",
-                    "domain": _domain(cat.get("source_url") or "") or "catalyst",
+                    "domain": cat_domain,
                     "source_type": "catalyst",
                     "provider": cat.get("source_name") or "catalyst",
                     "published": cat.get("published_at") or cat.get("detected_at") or "",
@@ -162,23 +259,16 @@ def build_ticker_dossiers(
                     "supporting_source_count": cat.get("supporting_source_count"),
                 }
             )
-            key = _normalize_claim_key(cat.get("headline") or cat.get("thesis") or "")
-            if key:
-                bucket = claim_map.setdefault(
-                    key,
-                    {
-                        "claim": cat.get("headline") or cat.get("thesis"),
-                        "domains": set(),
-                        "urls": [],
-                        "count": 0,
-                    },
-                )
-                bucket["domains"].add(_domain(cat.get("source_url") or "") or "catalyst")
-                if cat.get("source_url"):
-                    bucket["urls"].append(cat["source_url"])
-                bucket["count"] += int(cat.get("supporting_source_count") or 1)
+            claim_entries.append(
+                {
+                    "title": cat.get("headline") or cat.get("thesis") or "",
+                    "domain": cat_domain,
+                    "url": cat.get("source_url") or "",
+                    "weight": int(cat.get("supporting_source_count") or 1),
+                }
+            )
 
-        # Independent = distinct domains excluding empty, plus distinct source_types
+        # Independent = distinct real news domains, plus reddit/catalyst boosts
         domains = {s["domain"] for s in sources if s.get("domain")}
         source_types = {s["source_type"] for s in sources if s.get("source_type")}
         # Reddit alone should not count as multi-source confirmation
@@ -189,20 +279,7 @@ def build_ticker_dossiers(
             1 if "reddit" in source_types else 0
         ) + (1 if "catalyst" in source_types and independent_news_domains else 0)
 
-        corroborated_claims = []
-        for bucket in claim_map.values():
-            domain_count = len(bucket["domains"])
-            if domain_count >= 2 or bucket["count"] >= 2:
-                corroborated_claims.append(
-                    {
-                        "claim": bucket["claim"],
-                        "independent_domains": sorted(bucket["domains"]),
-                        "domain_count": domain_count,
-                        "mention_count": bucket["count"],
-                        "urls": bucket["urls"][:4],
-                    }
-                )
-        corroborated_claims.sort(key=lambda c: (-c["domain_count"], -c["mention_count"]))
+        corroborated_claims = cluster_claims(claim_entries)
 
         opt = options_by_ticker.get(t)
         top_cat = cats_by_ticker.get(t, [{}])[0] if cats_by_ticker.get(t) else {}
@@ -245,14 +322,27 @@ def build_ticker_dossiers(
             strategy_candidates = proposals_to_play_dicts(proposals)
 
         freshness_hours = []
+        reference_now = now or utc_now()
         for s in sources:
             dt = _parse_published(s.get("published"))
             if dt:
-                now = utc_now()
                 if dt.tzinfo is None:
-                    dt = dt.replace(tzinfo=now.tzinfo)
-                freshness_hours.append(round((now - dt).total_seconds() / 3600, 1))
+                    dt = dt.replace(tzinfo=reference_now.tzinfo)
+                freshness_hours.append(
+                    round((reference_now - dt).total_seconds() / 3600, 1)
+                )
         newest_hours = min(freshness_hours) if freshness_hours else None
+
+        meets_bar = (
+            independent_source_count >= settings.min_independent_sources
+            and len(independent_news_domains) >= 1
+        )
+        if meets_bar:
+            tier = TIER_CONFIRMED
+        elif independent_news_domains or corroborated_claims:
+            tier = TIER_DEVELOPING
+        else:
+            tier = TIER_WATCH
 
         research_quality = {
             "independent_source_count": independent_source_count,
@@ -261,9 +351,8 @@ def build_ticker_dossiers(
             "news_domain_count": len(independent_news_domains),
             "corroborated_claim_count": len(corroborated_claims),
             "newest_source_age_hours": newest_hours,
-            "meets_multi_source_bar": independent_source_count
-            >= settings.min_independent_sources
-            and len(independent_news_domains) >= 1,
+            "meets_multi_source_bar": meets_bar,
+            "conviction_tier": tier,
             "max_age_hours_applied": max_age,
         }
 
@@ -272,6 +361,7 @@ def build_ticker_dossiers(
                 "ticker": t,
                 "mention_count": ticker_counts.get(t, ticker_counts.get(ticker, 0)),
                 "buzz_delta": buzz_deltas.get(t, buzz_deltas.get(ticker, 0.0)),
+                "candidate_sources": (candidate_sources or {}).get(t, []),
                 "sources": sources[:20],
                 "corroborated_claims": corroborated_claims[:5],
                 "catalysts": cats_by_ticker.get(t, [])[:5],
@@ -375,6 +465,7 @@ def dossier_verdicts(dossiers: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "ticker": d["ticker"],
                 "mention_count": d.get("mention_count", 0),
                 "buzz_delta": d.get("buzz_delta", 0.0),
+                "candidate_sources": d.get("candidate_sources", []),
                 "source_count": len(d.get("sources") or []),
                 "independent_source_count": independent,
                 "news_domain_count": news_domains,
@@ -383,10 +474,14 @@ def dossier_verdicts(dossiers: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "newest_source_age_hours": quality.get("newest_source_age_hours"),
                 "strategy_candidates": len(d.get("strategy_candidates") or []),
                 "meets_multi_source_bar": meets,
+                "conviction_tier": quality.get("conviction_tier", TIER_WATCH),
                 "fail_reason": reason,
             }
         )
     return verdicts
+
+
+_TIER_ORDER = {TIER_CONFIRMED: 0, TIER_DEVELOPING: 1, TIER_WATCH: 2}
 
 
 def validate_narratives(
@@ -396,9 +491,13 @@ def validate_narratives(
     require_multi_source: bool | None = None,
     options: list[OptionsSnapshot] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Attach research_quality, prefer multi-source, drop single-source weak
-    theses. Returns (kept, dropped) where each dropped entry records the
-    title, tickers, and the reason it was rejected."""
+    """Attach research_quality with a conviction tier, sanity-check options
+    plays against the real chain, and sort confirmed narratives first.
+
+    Narratives are only dropped when they reference tickers with no research
+    dossier at all (unsupported/hallucinated theses). Thin sourcing demotes
+    the tier instead of deleting the content — an empty report is a worse
+    failure mode than a labeled low-confidence one. Returns (kept, dropped)."""
     hard_gate = (
         settings.require_multi_source_narratives
         if require_multi_source is None
@@ -425,6 +524,7 @@ def validate_narratives(
             raw["research_quality"] = {
                 "independent_source_count": 0,
                 "meets_multi_source_bar": False,
+                "conviction_tier": TIER_WATCH,
                 "warning": "No matching research dossier for tickers",
             }
             if hard_gate:
@@ -447,14 +547,26 @@ def validate_narratives(
             corroborated += d["research_quality"].get("corroborated_claim_count", 0)
 
         meets = independent >= settings.min_independent_sources and len(news_domains) >= 1
+        if meets:
+            tier = TIER_CONFIRMED
+        elif news_domains or corroborated:
+            tier = TIER_DEVELOPING
+        else:
+            tier = TIER_WATCH
         raw["research_quality"] = {
             "independent_source_count": independent,
             "news_domain_count": len(news_domains),
             "source_types": sorted(source_types),
             "corroborated_claim_count": corroborated,
             "meets_multi_source_bar": meets,
+            "conviction_tier": tier,
             "dossier_tickers": [d["ticker"] for d in matched],
         }
+        if tier != TIER_CONFIRMED:
+            raw["research_quality"]["warning"] = (
+                "Multi-source bar not met — treat as "
+                f"{tier} conviction, not a confirmed story"
+            )
 
         existing_urls = {s.get("url") for s in raw.get("sources") or [] if s.get("url")}
         enriched_sources = list(raw.get("sources") or [])
@@ -498,15 +610,11 @@ def validate_narratives(
         if kept_plays:
             raw["options_plays"] = kept_plays[:3]
 
-        if hard_gate and not meets:
-            _drop(
-                raw,
-                f"Failed multi-source bar: {independent} independent source(s), "
-                f"{len(news_domains)} news domain(s); need "
-                f"{settings.min_independent_sources}+ sources incl. 1 news domain",
-            )
-            continue
-
         validated.append(raw)
 
+    validated.sort(
+        key=lambda n: _TIER_ORDER.get(
+            (n.get("research_quality") or {}).get("conviction_tier", TIER_WATCH), 2
+        )
+    )
     return validated, dropped

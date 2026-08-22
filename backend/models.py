@@ -123,6 +123,9 @@ class BriefingContent(BaseModel):
     narratives: list[Narrative] = Field(default_factory=list)
     sports_angles: list[SportsAngle] = Field(default_factory=list)
     radar: list[RadarItem] = Field(default_factory=list)
+    # Deterministic data section (index tape, movers, IV extremes, earnings)
+    # so the briefing has substance even when no narrative clears the bar.
+    market_dashboard: dict[str, Any] = Field(default_factory=dict)
     generated_at: datetime = Field(default_factory=datetime.utcnow)
     raw_stats: dict[str, Any] = Field(default_factory=dict)
     research_metadata: dict[str, Any] = Field(default_factory=dict)

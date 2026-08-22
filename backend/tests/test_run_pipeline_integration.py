@@ -96,7 +96,29 @@ def pipeline_env(tmp_path, monkeypatch):
     async def fake_universe():
         return {"ACME"}
 
-    async def fake_news(tickers):
+    async def fake_names():
+        return {"ACME": "Acme"}
+
+    async def fake_gather_candidates(*, buzz_scores, overnight_catalysts, universe, as_of=None, limit=None):
+        from pipeline.candidates import CandidateSet
+
+        tickers = [
+            t
+            for t in sorted(buzz_scores, key=buzz_scores.get, reverse=True)
+            if universe is None or t in universe
+        ][: limit or settings.max_tickers]
+        return CandidateSet(
+            tickers=tickers,
+            sources_by_ticker={t: ["reddit"] for t in tickers},
+        )
+
+    async def fake_earnings(as_of=None, days=3, limit=8):
+        return []
+
+    async def fake_dashboard(**kwargs):
+        return {"indices": [], "watchlist_movers": []}
+
+    async def fake_news(tickers, names=None):
         return [_news("https://reuters.com/acme", "Reuters"), _news("https://cnbc.com/acme", "CNBC")]
 
     async def fake_options(tickers):
@@ -117,18 +139,22 @@ def pipeline_env(tmp_path, monkeypatch):
     async def fake_macro():
         return []
 
-    async def fake_llm(client, prompt):
-        return json.dumps(state["llm_response"]), [], "responses"
+    async def fake_llm(client, **kwargs):
+        return dict(state["llm_response"]), [], "responses"
 
     monkeypatch.setattr(run_mod, "collect_reddit_posts", fake_reddit)
     monkeypatch.setattr(run_mod, "get_ticker_universe", fake_universe)
+    monkeypatch.setattr(run_mod, "get_ticker_names", fake_names)
+    monkeypatch.setattr(run_mod, "gather_candidates", fake_gather_candidates)
+    monkeypatch.setattr(run_mod, "fetch_earnings_candidates", fake_earnings)
+    monkeypatch.setattr(run_mod, "build_market_dashboard", fake_dashboard)
     monkeypatch.setattr(run_mod, "collect_finance_news_for_watchlist", fake_news)
     monkeypatch.setattr(run_mod, "collect_options", fake_options)
     monkeypatch.setattr(run_mod, "collect_sports_odds", fake_odds)
     monkeypatch.setattr(run_mod, "fetch_raw_odds_events", fake_raw_odds)
     monkeypatch.setattr(run_mod, "collect_sports_news", fake_sports_news)
     monkeypatch.setattr(run_mod, "fetch_macro_snapshot", fake_macro)
-    monkeypatch.setattr(synth_mod, "_generate_briefing_json", fake_llm)
+    monkeypatch.setattr(synth_mod, "generate_llm_briefing", fake_llm)
 
     return state
 

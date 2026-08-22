@@ -1,12 +1,32 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import math
+import time
 from dataclasses import dataclass, field
 from datetime import date, datetime
-from typing import Any
+from typing import Any, Callable, TypeVar
 
 import yfinance as yf
+
+logger = logging.getLogger(__name__)
+
+_T = TypeVar("_T")
+
+
+def _with_retry(fn: Callable[[], _T], attempts: int = 2, delay: float = 1.5) -> _T:
+    """yfinance endpoints fail transiently (rate limits, empty payloads);
+    one spaced retry recovers most of them without stalling the run."""
+    last_exc: Exception | None = None
+    for attempt in range(attempts):
+        try:
+            return fn()
+        except Exception as exc:  # noqa: BLE001
+            last_exc = exc
+            if attempt < attempts - 1:
+                time.sleep(delay * (attempt + 1))
+    raise last_exc  # type: ignore[misc]
 
 from config import settings
 from pipeline.strategies import classify_iv_regime
@@ -178,19 +198,51 @@ def _realized_vol_20d(stock: yf.Ticker) -> float | None:
         return None
 
 
+def _resolve_price(stock: yf.Ticker) -> tuple[float | None, float | None]:
+    """(price, previous_close) via fast_info first — the .info scrape is slow
+    and heavily rate limited — then .info, then recent history."""
+    try:
+        fast = stock.fast_info
+        price = _safe_float(getattr(fast, "last_price", None))
+        prev = _safe_float(getattr(fast, "previous_close", None))
+        if price:
+            return price, prev
+    except Exception:
+        pass
+    try:
+        info = stock.info or {}
+        price = _safe_float(info.get("regularMarketPrice") or info.get("currentPrice"))
+        prev = _safe_float(info.get("regularMarketPreviousClose") or info.get("previousClose"))
+        if price:
+            return price, prev
+    except Exception:
+        pass
+    try:
+        hist = stock.history(period="5d")
+        closes = hist["Close"].dropna()
+        if len(closes) >= 2:
+            return float(closes.iloc[-1]), float(closes.iloc[-2])
+        if len(closes) == 1:
+            return float(closes.iloc[-1]), None
+    except Exception:
+        pass
+    return None, None
+
+
 def fetch_options_snapshot(ticker: str) -> OptionsSnapshot:
     snapshot = OptionsSnapshot(ticker=ticker, current_price=None, nearest_expiry=None)
     try:
         stock = yf.Ticker(ticker)
-        info = stock.info or {}
-        snapshot.current_price = _safe_float(info.get("regularMarketPrice") or info.get("currentPrice"))
-        prev_close = _safe_float(info.get("regularMarketPreviousClose") or info.get("previousClose"))
+        snapshot.current_price, prev_close = _resolve_price(stock)
         if snapshot.current_price and prev_close:
             snapshot.pct_change = round(
                 (snapshot.current_price - prev_close) / prev_close * 100, 2
             )
 
-        expiries = list(stock.options or [])
+        try:
+            expiries = _with_retry(lambda: list(stock.options or []))
+        except Exception:
+            expiries = []
         if not expiries:
             snapshot.error = "No options chain available"
             return snapshot
@@ -203,7 +255,7 @@ def fetch_options_snapshot(ticker: str) -> OptionsSnapshot:
         snapshot.next_expiry = back
         snapshot.expiries_considered = [e for e in (front, back) if e]
 
-        chain = stock.option_chain(front)
+        chain = _with_retry(lambda: stock.option_chain(front))
         calls = chain.calls
         puts = chain.puts
         _merge_chain(
@@ -278,6 +330,12 @@ def fetch_options_snapshot(ticker: str) -> OptionsSnapshot:
 
 
 async def collect_options(tickers: list[str]) -> list[OptionsSnapshot]:
-    loop = asyncio.get_event_loop()
-    tasks = [loop.run_in_executor(None, fetch_options_snapshot, ticker) for ticker in tickers]
-    return await asyncio.gather(*tasks)
+    # Bounded concurrency — hammering yfinance with 15 parallel chain fetches
+    # is exactly what used to trigger rate-limit errors and null snapshots.
+    semaphore = asyncio.Semaphore(4)
+
+    async def fetch(ticker: str) -> OptionsSnapshot:
+        async with semaphore:
+            return await asyncio.to_thread(fetch_options_snapshot, ticker)
+
+    return await asyncio.gather(*(fetch(t) for t in tickers))

@@ -44,7 +44,7 @@ async def fetch_subreddit_posts_rss(
     response.raise_for_status()
     parsed = feedparser.parse(response.text)
     posts: list[RedditPost] = []
-    for entry in parsed.entries[:limit]:
+    for index, entry in enumerate(parsed.entries[:limit]):
         link = entry.get("link", "")
         posts.append(
             RedditPost(
@@ -53,7 +53,12 @@ async def fetch_subreddit_posts_rss(
                 selftext=entry.get("summary", "")[:1500],
                 url=link,
                 permalink=link.replace("https://www.reddit.com", "").split("?")[0],
-                score=0,
+                # RSS carries no vote/comment counts. Use hot-feed position as
+                # an engagement proxy so weighted buzz keeps an ordering
+                # instead of collapsing to weight 1.0 for every post (this is
+                # the path production hits — Reddit 403s the JSON API from
+                # server IPs).
+                score=max(limit - index, 1),
                 num_comments=0,
                 created_utc=time.time(),
             )

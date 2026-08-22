@@ -455,7 +455,9 @@ def test_build_ticker_dossiers_corroborates_multi_domain_news() -> None:
     assert quality["independent_source_count"] >= 2
 
 
-def test_validate_narratives_drops_single_source_when_required() -> None:
+def test_validate_narratives_tiers_instead_of_dropping() -> None:
+    """Thin sourcing demotes a narrative's conviction tier; only theses with
+    no dossier at all are dropped."""
     from pipeline.research import validate_narratives
 
     dossiers = [
@@ -487,23 +489,62 @@ def test_validate_narratives_drops_single_source_when_required() -> None:
             ],
         }
     ]
-    kept, dropped = validate_narratives(
-        [{"title": "Weak", "tickers": ["ACME"], "sources": [], "options_plays": [{"direction": "call", "ticker": "ACME", "strike_zone": "calls", "expiry": "weekly", "degen_score": 4}]}],
-        dossiers,
+    weak = {
+        "title": "Weak",
+        "tickers": ["ACME"],
+        "sources": [],
+        "options_plays": [
+            {"direction": "call", "ticker": "ACME", "strike_zone": "calls", "expiry": "weekly", "degen_score": 4}
+        ],
+    }
+    kept, dropped = validate_narratives([dict(weak)], dossiers, require_multi_source=True)
+    assert dropped == []
+    assert len(kept) == 1
+    quality = kept[0]["research_quality"]
+    assert quality["meets_multi_source_bar"] is False
+    assert quality["conviction_tier"] == "watch"
+    assert "warning" in quality
+    # Naked-call play was replaced by the deterministic strategy candidate
+    assert kept[0]["options_plays"][0]["strategy_type"] == "debit_call_spread"
+
+    # A thesis whose tickers have no dossier at all still gets dropped
+    unsupported = {"title": "Ghost", "tickers": ["ZZZZ"], "sources": [], "options_plays": []}
+    kept2, dropped2 = validate_narratives([unsupported], dossiers, require_multi_source=True)
+    assert kept2 == []
+    assert len(dropped2) == 1
+    assert dropped2[0]["tickers"] == ["ZZZZ"]
+
+
+def test_validate_narratives_sorts_confirmed_first() -> None:
+    from pipeline.research import validate_narratives
+
+    def dossier(ticker: str, meets: bool) -> dict:
+        return {
+            "ticker": ticker,
+            "research_quality": {
+                "independent_source_count": 3 if meets else 1,
+                "distinct_domains": ["reuters.com", "cnbc.com"] if meets else ["reddit.com"],
+                "source_types": ["news"] if meets else ["reddit"],
+                "corroborated_claim_count": 1 if meets else 0,
+                "meets_multi_source_bar": meets,
+                "news_domain_count": 2 if meets else 0,
+            },
+            "sources": [],
+            "strategy_candidates": [],
+        }
+
+    narratives = [
+        {"title": "Thin", "tickers": ["WEAK"], "sources": [], "options_plays": []},
+        {"title": "Solid", "tickers": ["GOOD"], "sources": [], "options_plays": []},
+    ]
+    kept, _ = validate_narratives(
+        narratives,
+        [dossier("WEAK", False), dossier("GOOD", True)],
         require_multi_source=True,
     )
-    assert kept == []
-    assert len(dropped) == 1
-    assert dropped[0]["tickers"] == ["ACME"]
-    assert "multi-source bar" in dropped[0]["reason"]
-
-    soft, _ = validate_narratives(
-        [{"title": "Weak", "tickers": ["ACME"], "sources": [], "options_plays": [{"direction": "call", "ticker": "ACME", "strike_zone": "calls", "expiry": "weekly", "degen_score": 4}]}],
-        dossiers,
-        require_multi_source=False,
-    )
-    assert len(soft) == 1
-    assert soft[0]["options_plays"][0]["strategy_type"] == "debit_call_spread"
+    assert [n["title"] for n in kept] == ["Solid", "Thin"]
+    assert kept[0]["research_quality"]["conviction_tier"] == "confirmed"
+    assert kept[1]["research_quality"]["conviction_tier"] == "watch"
 
 
 def _mispriced_lines() -> list[dict]:

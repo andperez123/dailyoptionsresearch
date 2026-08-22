@@ -21,6 +21,8 @@ from database import (
 )
 from locks import LOCK_BRIEFING, job_lock
 from models import BriefingContent, NarrativeThread
+from pipeline.candidates import fetch_earnings_candidates, gather_candidates
+from pipeline.dashboard import build_market_dashboard
 from pipeline.macro import fetch_macro_snapshot
 from pipeline.news import collect_finance_news_for_watchlist
 from pipeline.odds import collect_sports_odds
@@ -33,12 +35,11 @@ from pipeline.sports_strategies import analyze_raw_events, finalize_decisions
 from pipeline.strategies import classify_iv_regime, compute_iv_rank
 from pipeline.synthesis import (
     compute_buzz_zscores,
-    select_top_tickers,
     serialize_threads,
     synthesize_briefing,
 )
 from pipeline.odds import fetch_raw_odds_events
-from pipeline.universe import get_ticker_universe
+from pipeline.universe import get_ticker_names, get_ticker_universe
 from time_utils import utc_now
 
 
@@ -201,21 +202,38 @@ async def run_pipeline(briefing_date: date | None = None) -> BriefingContent:
                 ),
             )
 
-            # Watchlist: engagement-weighted buzz, restricted to real symbols.
-            # Active narrative threads are force-included so tracked storylines
-            # keep getting research even when their buzz fades.
+            # Overnight catalysts feed both candidate selection and dossiers
+            since = utc_now() - timedelta(hours=18)
+            catalysts = await get_top_catalysts_since(since, limit=15)
+            overnight = [c.model_dump(mode="json") for c in catalysts]
+            report.stage("overnight_catalysts", count=len(overnight))
+
+            # Watchlist: Reddit buzz merged with day movers, upcoming earnings,
+            # and catalyst-wire tickers — one dead source no longer blanks the
+            # list. Active narrative threads are force-included so tracked
+            # storylines keep getting research even when their buzz fades.
             universe = await get_ticker_universe()
             buzz_scores = weighted_ticker_buzz(all_finance_posts)
-            top_tickers = select_top_tickers(buzz_scores, universe=universe)
+            candidates = await gather_candidates(
+                buzz_scores=buzz_scores,
+                overnight_catalysts=overnight,
+                universe=universe,
+                as_of=briefing_date if briefing_date != date.today() else None,
+            )
+            top_tickers = list(candidates.tickers)
 
             active_threads = await list_narrative_threads(status="active")
             thread_tickers = [t.ticker for t in active_threads[: settings.thread_max_tracked]]
             forced = [t for t in thread_tickers if t not in top_tickers]
             top_tickers = top_tickers + forced
+            candidate_sources = dict(candidates.sources_by_ticker)
+            for ticker in forced:
+                candidate_sources[ticker] = ["thread"]
             report.stage(
                 "watchlist",
                 watchlist=top_tickers,
-                from_buzz=len(top_tickers) - len(forced),
+                candidate_sources=candidate_sources,
+                candidate_details=candidates.details,
                 forced_from_threads=forced,
                 active_threads=len(active_threads),
                 universe_available=universe is not None,
@@ -251,8 +269,9 @@ async def run_pipeline(briefing_date: date | None = None) -> BriefingContent:
                 bet_decisions=len(sports_bet_decisions),
             )
 
+            ticker_names = await get_ticker_names()
             news, options, odds, macro_context = await asyncio.gather(
-                collect_finance_news_for_watchlist(top_tickers),
+                collect_finance_news_for_watchlist(top_tickers, names=ticker_names),
                 collect_options(top_tickers),
                 collect_sports_odds(limit=12),
                 fetch_macro_snapshot(),
@@ -268,11 +287,6 @@ async def run_pipeline(briefing_date: date | None = None) -> BriefingContent:
                 macro_series=len(macro_context or []),
             )
 
-            since = utc_now() - timedelta(hours=18)
-            catalysts = await get_top_catalysts_since(since, limit=15)
-            overnight = [c.model_dump(mode="json") for c in catalysts]
-            report.stage("overnight_catalysts", count=len(overnight))
-
             dossiers = build_ticker_dossiers(
                 tickers=top_tickers,
                 news=news,
@@ -283,8 +297,23 @@ async def run_pipeline(briefing_date: date | None = None) -> BriefingContent:
                 buzz_deltas=buzz_deltas,
                 macro_context=macro_context,
                 max_age_hours=settings.briefing_news_max_age_hours,
+                ticker_names=ticker_names,
+                candidate_sources=candidate_sources,
             )
             report.stage("dossiers", built=len(dossiers))
+
+            earnings_ahead = await fetch_earnings_candidates(days=5, limit=8)
+            market_dashboard = await build_market_dashboard(
+                options=options,
+                earnings=earnings_ahead,
+                buzz_deltas=buzz_deltas,
+                ticker_counts=ticker_counts,
+            )
+            report.stage(
+                "dashboard",
+                indices=len(market_dashboard.get("indices", [])),
+                movers=len(market_dashboard.get("watchlist_movers", [])),
+            )
 
             briefing = await synthesize_briefing(
                 finance_posts=all_finance_posts,
@@ -301,6 +330,7 @@ async def run_pipeline(briefing_date: date | None = None) -> BriefingContent:
                 top_tickers=top_tickers,
                 dossiers=dossiers,
                 ongoing_narratives=serialize_threads(active_threads),
+                market_dashboard=market_dashboard,
                 report=report,
             )
             report.stage(
