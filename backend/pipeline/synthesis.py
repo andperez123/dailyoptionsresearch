@@ -149,6 +149,12 @@ def build_sports_research_packet(
                 "(vig-removed consensus vs best available price).",
                 "Sports angles MUST be built around engine_bet_decisions when present — "
                 "lead with the pick, then the story behind it.",
+                "Decisions come in three grades: 'bet' (cleared every gate), 'lean' "
+                "(positive expected value that missed a gate — still a real, actionable "
+                "setup to watch at the stated number), and 'pass'. Cover the bets first, "
+                "then the highest-EV leans. Always take a stance on the best available "
+                "setups; reserve 'nothing here' for slates where no outcome shows "
+                "positive EV.",
                 "Never invent odds, edges, or picks not present in engine_bet_decisions "
                 "or ranked_odds_events.",
             ],
@@ -193,6 +199,8 @@ Hard rules:
   what_changed since the last update. If evidence contradicts the thread's
   thesis, say so — never silently ignore it. New theses use status "new".
 - why_now must use fresh dossier evidence, not generic framing.
+- Always deliver analysis even when sourcing is thin — lower the degen score
+  and say so plainly rather than returning an empty thesis.
 - Degen score 1 = conservative, 5 = speculative. Include risk framing.
 - This is entertainment/research, not financial advice."""
 
@@ -267,6 +275,9 @@ Hard rules:
   state the decision (selection, market, price, stake) in line_note, then
   the story, then what would confirm or invalidate the number. Take a
   stance — the reader wants a decision, not a survey.
+  A "lean" is a real setup (positive EV that missed a secondary gate) —
+  cover the best leans as actionable angles rather than skipping them.
+  Reserve empty sports_angles for slates with no positive-EV outcomes.
 - Do NOT invent matchups, odds, injuries, or public-vs-sharp claims.
 - radar: single-source or still-forming tickers worth watching, with a
   specific note on what confirmation to wait for.
@@ -317,7 +328,10 @@ Return JSON with this exact structure:
   ]
 }}
 
-Produce 2-4 sports angles (when events exist) and 3-8 radar items."""
+Produce 2-4 sports angles (when events exist) and 3-8 radar items.
+A "lean" engine decision is a real setup — cover the best leans as actionable
+angles (with the caveat that they missed the full bet bar) rather than skipping
+them. Reserve an empty sports_angles list for slates with no positive-EV outcomes."""
 
 
 def _normalize_matchup(value: str) -> str:
@@ -783,11 +797,17 @@ async def synthesize_briefing(
     for narrative in data["narratives"]:
         tier = (narrative.get("research_quality") or {}).get("conviction_tier", "watch")
         tier_counts[tier] = tier_counts.get(tier, 0) + 1
+    low_confidence_count = sum(
+        1
+        for n in data["narratives"]
+        if not (n.get("research_quality") or {}).get("meets_multi_source_bar", False)
+    )
     if report is not None:
         report.set("raw_narrative_count", before_count)
         report.set("validated_narrative_count", len(data["narratives"]))
         report.set("narratives_dropped", dropped_reasons)
         report.set("narrative_tiers", tier_counts)
+        report.set("low_confidence_narratives", low_confidence_count)
         report.set("llm_api_mode", api_mode)
         report.set("web_citations", len(citations))
 

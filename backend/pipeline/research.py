@@ -502,19 +502,26 @@ def validate_narratives(
     dossiers: list[dict[str, Any]],
     *,
     require_multi_source: bool | None = None,
+    demote_single_source: bool | None = None,
     options: list[OptionsSnapshot] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Attach research_quality with a conviction tier, sanity-check options
     plays against the real chain, and sort confirmed narratives first.
 
     Narratives are only dropped when they reference tickers with no research
-    dossier at all (unsupported/hallucinated theses). Thin sourcing demotes
-    the tier instead of deleting the content — an empty report is a worse
-    failure mode than a labeled low-confidence one. Returns (kept, dropped)."""
+    dossier at all (unsupported/hallucinated theses), or when demotion is
+    disabled and the multi-source bar fails. Thin sourcing demotes the tier
+    instead of deleting the content — an empty report is a worse failure
+    mode than a labeled low-confidence one. Returns (kept, dropped)."""
     hard_gate = (
         settings.require_multi_source_narratives
         if require_multi_source is None
         else require_multi_source
+    )
+    demote = (
+        settings.demote_single_source_narratives
+        if demote_single_source is None
+        else demote_single_source
     )
     dossier_by_ticker = {d["ticker"]: d for d in dossiers}
     snapshot_by_ticker = {o.ticker.upper(): o for o in options or []}
@@ -622,6 +629,15 @@ def validate_narratives(
                     existing_types.add(candidate.get("strategy_type"))
         if kept_plays:
             raw["options_plays"] = kept_plays[:3]
+
+        if hard_gate and not meets and not demote:
+            _drop(
+                raw,
+                f"Failed multi-source bar: {independent} independent source(s), "
+                f"{len(news_domains)} news domain(s); need "
+                f"{settings.min_independent_sources}+ sources incl. 1 news domain",
+            )
+            continue
 
         validated.append(raw)
 

@@ -31,7 +31,13 @@ from pipeline.reddit import collect_reddit_posts, count_ticker_mentions, weighte
 from pipeline.report import RunReportBuilder
 from pipeline.research import build_ticker_dossiers
 from pipeline.sports_news import attach_news_to_events, collect_sports_news, feed_keys_for_sport
-from pipeline.sports_strategies import analyze_raw_events, finalize_decisions
+from pipeline.sports_strategies import (
+    analyze_raw_events,
+    build_scan_review,
+    decision_to_dict,
+    finalize_decisions,
+    rank_setups,
+)
 from pipeline.strategies import classify_iv_regime, compute_iv_rank
 from pipeline.synthesis import (
     compute_buzz_zscores,
@@ -262,11 +268,47 @@ async def run_pipeline(briefing_date: date | None = None) -> BriefingContent:
                 }
                 for item in sports_news_items[:20]
             ]
+            sports_setups = rank_setups(sports_bet_decisions)
             report.stage(
                 "sports",
                 odds_events=len(raw_events),
                 sports_news=len(sports_news_items),
                 bet_decisions=len(sports_bet_decisions),
+                actionable_setups=len(sports_setups),
+            )
+            # Full sports research trail: ranked setups plus the scan review
+            # (thresholds, closest candidates, unmet gates) so even a day with
+            # zero bets documents exactly what was analyzed and why.
+            report.set(
+                "sports_top_setups",
+                [
+                    {
+                        k: v
+                        for k, v in decision_to_dict(d).items()
+                        if k
+                        in {
+                            "matchup",
+                            "sport_title",
+                            "commence_time",
+                            "market_label",
+                            "selection",
+                            "point",
+                            "best_price",
+                            "best_bookmaker",
+                            "edge_pct",
+                            "ev_pct",
+                            "stake_units",
+                            "decision",
+                            "confidence",
+                            "rationale",
+                        }
+                    }
+                    for d in sports_setups
+                ],
+            )
+            report.set(
+                "sports_scan_review",
+                build_scan_review(sports_bet_decisions),
             )
 
             ticker_names = await get_ticker_names()

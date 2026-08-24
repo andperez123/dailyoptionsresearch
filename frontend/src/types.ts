@@ -95,6 +95,36 @@ export interface SportsBetDecision {
   research_checklist: string[]
   line_movement_note: string | null
   news_support_count: number
+  book_count?: number
+}
+
+export interface SportsScanCandidate {
+  matchup: string
+  sport_title: string
+  commence_time: string
+  market_label: string
+  selection: string
+  point: number | null
+  best_price: number
+  best_bookmaker: string
+  edge_pct: number
+  ev_pct: number
+  book_count: number
+  decision: string
+  why_not_bet: string
+}
+
+export interface SportsScanReview {
+  games_analyzed: number
+  games_without_pricing: number
+  decisions: { bet: number; lean: number; pass: number }
+  thresholds: {
+    min_edge_pct: number
+    min_ev_pct: number
+    min_books: number
+    horizon_days: number
+  }
+  closest_candidates: SportsScanCandidate[]
 }
 
 export interface SportsBetRecordEntry {
@@ -416,6 +446,8 @@ export interface SportsBoardResponse {
   quota_remaining: number | null
   quota_used: number | null
   best_bets: SportsBetDecision[]
+  top_setups?: SportsBetDecision[]
+  scan_review?: SportsScanReview
   bet_horizon_days: number
 }
 
@@ -471,11 +503,29 @@ export interface RunReportBody {
   narratives_dropped?: DroppedNarrative[]
   raw_narrative_count?: number
   validated_narrative_count?: number
+  low_confidence_narratives?: number
   low_confidence_fallback?: boolean
   fallback_note?: string
   llm_api_mode?: string
   web_citations?: number
   summary?: string
+  sports_top_setups?: Array<{
+    matchup: string
+    sport_title: string
+    commence_time: string
+    market_label: string
+    selection: string
+    point: number | null
+    best_price: number
+    best_bookmaker: string
+    edge_pct: number
+    ev_pct: number
+    stake_units: number
+    decision: string
+    confidence: number
+    rationale: string
+  }>
+  sports_scan_review?: SportsScanReview
   [key: string]: unknown
 }
 

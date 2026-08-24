@@ -106,6 +106,7 @@ class BetDecision:
     research_checklist: list[str] = field(default_factory=list)
     line_movement_note: Optional[str] = None
     news_support_count: int = 0
+    book_count: int = 0
 
 
 def hours_until(commence_time: str, now: datetime) -> Optional[float]:
@@ -507,6 +508,7 @@ def analyze_game(
         research_checklist=build_research_checklist(sport_key),
         line_movement_note=movement_note,
         news_support_count=news_count,
+        book_count=best.book_count,
     )
 
 
@@ -612,6 +614,101 @@ def analyze_raw_events(
     return decisions
 
 
+def rank_setups(
+    decisions: list[BetDecision],
+    limit: Optional[int] = None,
+) -> list[BetDecision]:
+    """Ranked actionable setups: confirmed bets first, then positive-EV leans.
+
+    This is the "always surface the best available setup" tier — on most days
+    at least one outcome across the slate shows positive expected value, and
+    the board should push the best of them (honestly graded) rather than an
+    empty section because nothing cleared the full BET bar.
+    """
+    from config import settings
+
+    limit = limit if limit is not None else settings.sports_top_setups_count
+    order = {DECISION_BET: 0, DECISION_LEAN: 1}
+    actionable = [d for d in decisions if d.decision in order and d.ev_pct > 0]
+    actionable.sort(key=lambda d: (order[d.decision], -d.ev_pct))
+    return actionable[:limit]
+
+
+def _unmet_gates(decision: BetDecision) -> list[str]:
+    """Human-readable list of the BET gates this decision did not clear."""
+    from config import settings
+
+    gates: list[str] = []
+    if decision.ev_pct <= 0:
+        gates.append(f"negative EV ({decision.ev_pct:+.1f}%) — market efficiently priced")
+        return gates
+    if decision.edge_pct < settings.sports_min_edge_pct:
+        gates.append(
+            f"edge {decision.edge_pct:+.1f} pts below the {settings.sports_min_edge_pct:g} pt bar"
+        )
+    if decision.ev_pct < settings.sports_min_ev_pct:
+        gates.append(
+            f"EV {decision.ev_pct:+.1f}% below the {settings.sports_min_ev_pct:g}% bar"
+        )
+    if decision.book_count and decision.book_count < settings.sports_min_books_for_decision:
+        gates.append(
+            f"only {decision.book_count} book(s) quoting; "
+            f"{settings.sports_min_books_for_decision} required"
+        )
+    return gates
+
+
+def build_scan_review(
+    decisions: list[BetDecision],
+    *,
+    games_without_pricing: int = 0,
+) -> dict[str, Any]:
+    """Complete review of what the scan researched — the answer to "why is
+    there no recommendation?" Every analyzed game's best candidate is graded
+    with the exact gate(s) it missed."""
+    from config import settings
+
+    counts = Counter(d.decision for d in decisions)
+    closest = sorted(decisions, key=lambda d: -d.ev_pct)[:8]
+    return {
+        "games_analyzed": len(decisions),
+        "games_without_pricing": games_without_pricing,
+        "decisions": {
+            "bet": counts.get(DECISION_BET, 0),
+            "lean": counts.get(DECISION_LEAN, 0),
+            "pass": counts.get(DECISION_PASS, 0),
+        },
+        "thresholds": {
+            "min_edge_pct": settings.sports_min_edge_pct,
+            "min_ev_pct": settings.sports_min_ev_pct,
+            "min_books": settings.sports_min_books_for_decision,
+            "horizon_days": settings.sports_bet_horizon_days,
+        },
+        "closest_candidates": [
+            {
+                "matchup": d.matchup,
+                "sport_title": d.sport_title,
+                "commence_time": d.commence_time,
+                "market_label": d.market_label,
+                "selection": d.selection,
+                "point": d.point,
+                "best_price": d.best_price,
+                "best_bookmaker": d.best_bookmaker,
+                "edge_pct": d.edge_pct,
+                "ev_pct": d.ev_pct,
+                "book_count": d.book_count,
+                "decision": d.decision,
+                "why_not_bet": (
+                    "cleared all gates"
+                    if d.decision == DECISION_BET
+                    else "; ".join(_unmet_gates(d)) or "awaiting persistence confirmation"
+                ),
+            }
+            for d in closest
+        ],
+    }
+
+
 def decision_to_dict(decision: BetDecision) -> dict[str, Any]:
     return {
         "event_key": decision.event_key,
@@ -641,4 +738,5 @@ def decision_to_dict(decision: BetDecision) -> dict[str, Any]:
         "research_checklist": decision.research_checklist,
         "line_movement_note": decision.line_movement_note,
         "news_support_count": decision.news_support_count,
+        "book_count": decision.book_count,
     }

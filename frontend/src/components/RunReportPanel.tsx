@@ -116,6 +116,8 @@ export function RunReportPanel({ report, onTickerClick }: RunReportPanelProps) {
   const stages = body.stages ?? []
   const verdicts = body.dossier_verdicts ?? []
   const dropped = body.narratives_dropped ?? []
+  const sportsSetups = body.sports_top_setups ?? []
+  const sportsReview = body.sports_scan_review
   const watchlistStage = stages.find((s) => s.stage === 'watchlist')
   const redditStage = stages.find((s) => s.stage === 'reddit_collected')
   const buzzStage = stages.find((s) => s.stage === 'ticker_buzz')
@@ -175,6 +177,8 @@ export function RunReportPanel({ report, onTickerClick }: RunReportPanelProps) {
           <FunnelStat label="Multi-source" value={verdicts.length ? multiSource : '—'} />
           <FunnelStat label="Model theses" value={body.raw_narrative_count ?? '—'} />
           <FunnelStat label="Narratives" value={body.validated_narrative_count ?? '—'} />
+          <FunnelStat label="Low confidence" value={body.low_confidence_narratives ?? '—'} />
+          <FunnelStat label="Sports setups" value={sportsSetups.length || '—'} />
         </div>
 
         {(body.llm_api_mode || body.web_citations != null) && (
@@ -193,6 +197,69 @@ export function RunReportPanel({ report, onTickerClick }: RunReportPanelProps) {
           <ul>
             {verdicts.map((v) => (
               <VerdictRow key={v.ticker} verdict={v} onTickerClick={onTickerClick} />
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {sportsSetups.length > 0 && (
+        <section className="rounded-2xl bg-research-surface px-4 py-4 shadow-soft sm:px-5">
+          <h2 className="mb-3 px-1 text-sm font-semibold text-research-ink">
+            Sports setups this run
+          </h2>
+          <ul className="space-y-2 px-1">
+            {sportsSetups.map((s, i) => (
+              <li key={i} className="rounded-2xl bg-research-bg px-4 py-3">
+                <p className="text-sm font-semibold text-research-ink">
+                  {s.matchup}
+                  <span className="ml-2 font-mono text-xs font-normal tabular-nums text-research-muted">
+                    {s.selection}
+                    {s.point != null ? ` ${s.point}` : ''} {s.market_label}{' '}
+                    {s.best_price > 0 ? '+' : ''}
+                    {s.best_price} @ {s.best_bookmaker} · EV {s.ev_pct >= 0 ? '+' : ''}
+                    {s.ev_pct.toFixed(1)}%
+                  </span>
+                  <span
+                    className={`ml-2 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+                      s.decision === 'bet'
+                        ? 'bg-research-green-soft text-research-green'
+                        : 'bg-research-amber-soft text-research-amber'
+                    }`}
+                  >
+                    {s.decision}
+                  </span>
+                </p>
+                <p className="mt-1 text-sm text-research-muted">{s.rationale}</p>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {sportsSetups.length === 0 && sportsReview && sportsReview.games_analyzed > 0 && (
+        <section className="rounded-2xl bg-research-surface px-4 py-4 shadow-soft sm:px-5">
+          <h2 className="mb-2 px-1 text-sm font-semibold text-research-ink">
+            Sports scan review · nothing qualified
+          </h2>
+          <p className="px-1 text-sm text-research-muted">
+            {sportsReview.games_analyzed} games analyzed ({sportsReview.decisions.bet} bet ·{' '}
+            {sportsReview.decisions.lean} lean · {sportsReview.decisions.pass} pass). Closest
+            candidates and the gates they missed:
+          </p>
+          <ul className="mt-2 space-y-2 px-1">
+            {sportsReview.closest_candidates.map((c, i) => (
+              <li key={i} className="rounded-2xl bg-research-bg px-4 py-3">
+                <p className="text-sm font-semibold text-research-ink">
+                  {c.matchup}
+                  <span className="ml-2 font-mono text-xs font-normal tabular-nums text-research-muted">
+                    {c.selection}
+                    {c.point != null ? ` ${c.point}` : ''} {c.market_label} · EV{' '}
+                    {c.ev_pct >= 0 ? '+' : ''}
+                    {c.ev_pct.toFixed(1)}%
+                  </span>
+                </p>
+                <p className="mt-1 text-sm text-research-muted">{c.why_not_bet}</p>
+              </li>
             ))}
           </ul>
         </section>

@@ -55,17 +55,26 @@ class Settings(BaseSettings):
     odds_regions: str = "us"
     odds_max_sports_per_scan: int = 8
     odds_max_events: int = 24
+    # LLM briefing packet keeps a small book sample for prompt size; the
+    # decision engine uses the full depth below.
     odds_max_bookmakers_briefing: int = 3
+    odds_max_bookmakers_decision: int = 10
     odds_league_interest_bias: dict[str, float] = {}
     # Sports bet decision engine
     sports_bet_horizon_days: int = 3
-    sports_min_edge_pct: float = 2.0
-    sports_min_ev_pct: float = 3.0
+    sports_min_edge_pct: float = 1.5
+    sports_min_ev_pct: float = 2.0
     sports_min_books_for_decision: int = 3
     sports_kelly_multiplier: float = 0.25
     sports_max_stake_units: float = 3.0
     sports_require_edge_persistence: bool = True
-    sports_persistence_min_minutes: int = 30
+    sports_persistence_min_minutes: int = 15
+    # How many ranked setups (bets first, then best positive-EV leans) the
+    # board surfaces even when nothing clears the full BET bar.
+    sports_top_setups_count: int = 5
+    # Keep below-bar (single-source) narratives as clearly-labeled low
+    # confidence analysis instead of dropping them from the briefing.
+    demote_single_source_narratives: bool = True
     openai_use_web_search: bool = True
     openai_web_search_context: str = "medium"
     openai_deep_research_enabled: bool = False

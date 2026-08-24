@@ -65,7 +65,10 @@ async def job_sports_odds() -> None:
     board = await build_sports_board(force=True)
     await set_pipeline_state("last_sports_scan", utc_now_iso())
     logger.info(
-        "Sports board: %s games, %s best bets", len(board.games), len(board.best_bets)
+        "Sports board: %s games, %s best bets, %s top setups",
+        len(board.games),
+        len(board.best_bets),
+        len(board.top_setups),
     )
     graded = await grade_open_sports_bets()
     if any(graded.values()):

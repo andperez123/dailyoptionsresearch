@@ -328,6 +328,7 @@ def propose_strategies(
     front_dte = _dte(nearest_expiry, today)
     back_dte = _dte(far_expiry, today)
     picker = _ChainPicker(chains, min_leg_open_interest, max_leg_spread_pct)
+    liquidity_note = ""
 
     # Directional long-premium legs go further out when the catalyst needs
     # time; short-premium stays front where theta decays fastest.
@@ -393,6 +394,24 @@ def propose_strategies(
 
     front = strikes_for(nearest_expiry)
     if front is None:
+        # Progressive relaxation instead of a blank engine: a thin chain (or
+        # a pre-open one with one-sided quotes) should degrade to labeled
+        # lower-liquidity proposals, not zero analysis.
+        picker = _ChainPicker(chains, 0, None)
+        front = strikes_for(nearest_expiry)
+        if front is not None:
+            liquidity_note = (
+                "Liquidity below preferred thresholds "
+                f"(OI<{min_leg_open_interest} or wide spreads) — use limit orders and size down"
+            )
+        else:
+            picker = _ChainPicker(None, 0, None)
+            front = strikes_for(nearest_expiry)
+            liquidity_note = (
+                "No live liquid quotes near the targets — strikes are synthetic targets; "
+                "verify listed strikes and quotes before entry"
+            )
+    if front is None:
         return []
     directional = strikes_for(directional_expiry) or front
 
@@ -433,6 +452,8 @@ def propose_strategies(
         dte_for_score = expiry_dte if expiry_dte is not None else front_dte
         if dte_for_score is not None and dte_for_score <= 5:
             degen = min(degen + 1, 5)
+        if liquidity_note:
+            risk = f"{risk} · {liquidity_note}" if risk else liquidity_note
         proposals.append(
             StrategyProposal(
                 ticker=ticker,
